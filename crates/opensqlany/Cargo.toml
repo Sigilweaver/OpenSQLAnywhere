@@ -1,0 +1,19 @@
+[package]
+name = "opensqlany"
+description = "Reader for SAP SQL Anywhere on-disk page-store files"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+readme = "README.md"
+keywords = ["sqlanywhere", "database", "parser", "sap"]
+categories = ["parser-implementations", "database"]
+
+[dependencies]
+crc32fast.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+crc32fast.workspace = true

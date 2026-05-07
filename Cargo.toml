@@ -1,0 +1,18 @@
+[workspace]
+resolver = "3"
+members = ["crates/opensqlany", "crates/opensqlany-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://github.com/Sigilweaver/OpenSQLAnywhere"
+authors = ["Nathan Riley"]
+
+[workspace.dependencies]
+opensqlany = { path = "crates/opensqlany", version = "0.1.0" }
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+crc32fast = "1.4"
+thiserror = "1"

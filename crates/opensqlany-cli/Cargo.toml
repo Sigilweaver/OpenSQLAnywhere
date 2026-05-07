@@ -1,0 +1,18 @@
+[package]
+name = "opensqlany-cli"
+description = "Command-line inspector for SAP SQL Anywhere page-store files"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "opensqlany"
+path = "src/main.rs"
+
+[dependencies]
+opensqlany.workspace = true
+anyhow.workspace = true
+clap.workspace = true

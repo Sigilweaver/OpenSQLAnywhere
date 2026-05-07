@@ -1,0 +1,8 @@
+/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# Local test corpora should never be committed
+/testdata/private/
+*.db
+*.log
