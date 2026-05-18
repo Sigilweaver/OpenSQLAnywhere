@@ -17,6 +17,26 @@ pub struct Page<'a> {
 }
 
 impl<'a> Page<'a> {
+    /// Construct a `Page` view over an explicit byte slice.
+    ///
+    /// Useful for callers that have already obtained plaintext bytes
+    /// (e.g. via [`ApModel::deobfuscate_with_store`](crate::ApModel::deobfuscate_with_store))
+    /// and want to drive the slotted-page parser without round-tripping
+    /// through a [`PageStore`](crate::PageStore). `bytes` must be exactly
+    /// [`PAGE_SIZE`] long; longer slices are truncated and shorter slices
+    /// panic.
+    pub fn from_bytes(index: u64, bytes: &'a [u8]) -> Self {
+        assert!(
+            bytes.len() >= PAGE_SIZE,
+            "Page::from_bytes requires at least {PAGE_SIZE} bytes (got {})",
+            bytes.len()
+        );
+        Page {
+            index,
+            bytes: &bytes[..PAGE_SIZE],
+        }
+    }
+
     /// Zero-based page number within the store.
     #[inline]
     pub fn index(&self) -> u64 {
