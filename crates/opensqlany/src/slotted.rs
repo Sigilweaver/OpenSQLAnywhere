@@ -106,6 +106,32 @@ impl<'a> SlottedPage<'a> {
         }
         out
     }
+
+    /// Return the page-boundary overflow prefix, if present.
+    ///
+    /// When a QB record spans two SA17 pages the tail fragment is written at
+    /// `page[0x000..array_start)` — before the slot directory — on the page
+    /// that contains the next records. No slot points to this region, so it is
+    /// invisible to [`SlottedPage::row_bytes`].
+    ///
+    /// Returns `Some(bytes)` when the bytes before the slot directory are
+    /// non-zero (i.e. contain row continuation data).  Returns `None` when
+    /// there is no slot directory or the prefix region is all zeros (clean
+    /// page start).
+    pub fn overflow_prefix(&self) -> Option<&'a [u8]> {
+        let dir = self.directory.as_ref()?;
+        let end = dir.array_start;
+        if end == 0 {
+            return None;
+        }
+        let bytes = self.page.bytes();
+        let prefix = &bytes[..end];
+        if prefix.iter().all(|&b| b == 0) {
+            None
+        } else {
+            Some(prefix)
+        }
+    }
 }
 
 fn u16le(buf: &[u8], off: usize) -> u16 {

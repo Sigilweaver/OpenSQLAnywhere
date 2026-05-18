@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use opensqlany::{PageStore, PageType, SlottedPage};
+use opensqlany::{ApModel, PageStore, PageType, SlottedPage};
 
 #[derive(Parser)]
 #[command(
@@ -40,6 +40,21 @@ enum Cmd {
         /// Zero-based page number.
         page: u64,
     },
+    /// Summarise the AP deobfuscation model learned from a page store.
+    ApInfo {
+        /// Path to the page-store file.
+        file: PathBuf,
+    },
+    /// Deobfuscate and dump a single page.
+    Deob {
+        /// Path to the page-store file.
+        file: PathBuf,
+        /// Zero-based page number.
+        page: u64,
+        /// Print the raw (obfuscated) page instead of the plaintext.
+        #[arg(long)]
+        raw: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -48,6 +63,8 @@ fn main() -> Result<()> {
         Cmd::Inspect { file, verify_crc } => inspect(&file, verify_crc),
         Cmd::DumpPage { file, page } => dump_page(&file, page),
         Cmd::Slots { file, page } => slots(&file, page),
+        Cmd::ApInfo { file } => ap_info(&file),
+        Cmd::Deob { file, page, raw } => deob(&file, page, raw),
     }
 }
 
@@ -221,6 +238,47 @@ fn slots(path: &std::path::Path, pn: u64) -> Result<()> {
             }
         }
     }
+    Ok(())
+}
+
+fn ap_info(path: &std::path::Path) -> Result<()> {
+    let store = PageStore::open(path).with_context(|| format!("opening {path:?}"))?;
+    print!("Learning AP model from {}... ", path.display());
+    std::io::Write::flush(&mut std::io::stdout()).ok();
+    let model = ApModel::learn(&store);
+    println!("done.");
+    println!("  learned blocks : {}", model.learned_block_count());
+    println!("  total blocks   : {}", (store.page_count() + 15) / 16);
+    println!("  coverage       : {:.1}%",
+        100.0 * model.learned_block_count() as f64
+            / ((store.page_count() + 15) / 16).max(1) as f64);
+    println!("  bv(block 0)    : 0x{:02X}", model.bv_at(0));
+    Ok(())
+}
+
+fn deob(path: &std::path::Path, pn: u64, raw: bool) -> Result<()> {
+    let store = PageStore::open(path).with_context(|| format!("opening {path:?}"))?;
+    let page = store.page(pn)?;
+    let t = page.trailer();
+
+    if raw {
+        println!(
+            "page {pn} (raw)  type 0x{:02X}  flags {:02X}/{:02X}",
+            t.page_type_raw, t.flag_ff0, t.flag_ff1,
+        );
+        hexdump(page.bytes(), 0);
+        return Ok(());
+    }
+
+    let model = ApModel::learn(&store);
+    let plain = model.deobfuscate_with_store(page.bytes(), pn, &store);
+    let pt = PageType::from_byte(plain[0xFF2]);
+
+    println!(
+        "page {pn} (deobfuscated)  type {:?} (0x{:02X})  flags {:02X}/{:02X}",
+        pt, plain[0xFF2], plain[0xFF0], plain[0xFF1],
+    );
+    hexdump(&plain, 0);
     Ok(())
 }
 

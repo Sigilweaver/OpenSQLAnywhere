@@ -40,7 +40,7 @@ for page in store.pages().skip(1) {
     let t = page.trailer();
     println!("page {} type {:?}", page.index(), t.page_type());
 }
-# Ok::<(), sa17::Error>(())
+# Ok::<(), opensqlany::Error>(())
 ```
 
 ## Using the CLI
@@ -66,10 +66,11 @@ $ opensqlany slots database.db 2
 ## Relationship to OpenQBW
 
 Intuit QuickBooks `.QBW` company files are SA17 page stores with a
-deterministic additive-progression obfuscation applied on top. The
-companion project **OpenQBW** peels that obfuscation layer off and hands
-the resulting plaintext pages to this crate. OpenSQLAnywhere itself has no
-knowledge of and no dependency on QBW.
+deterministic additive-progression obfuscation applied on top. This crate
+includes an [`ApModel`] that removes that obfuscation before handing
+plaintext pages to the rest of the API. The companion project **OpenQBW**
+builds on top of this crate to expose the QuickBooks-specific business-object
+layer.
 
 ## License
 

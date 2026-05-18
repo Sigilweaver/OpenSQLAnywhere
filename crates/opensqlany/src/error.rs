@@ -2,7 +2,7 @@ use std::io;
 
 use thiserror::Error;
 
-/// Convenience result type aliased to [`Error`].
+/// Convenience result type aliased to [`enum@Error`].
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Errors returned by the SA17 reader.
