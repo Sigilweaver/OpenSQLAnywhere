@@ -47,7 +47,7 @@ mod superblock;
 
 pub use ap::{ApModel, SECTOR_SIZE, SECTORS_PER_PAGE};
 pub use error::{Error, Result};
-pub use page::{Page, PageTrailer, PageType, PAGE_SIZE};
+pub use page::{PAGE_SIZE, Page, PageTrailer, PageType};
 pub use slotted::{SlotDirectory, SlottedPage};
 pub use store::{PageStore, Pages};
-pub use superblock::{Superblock, SA_COPYRIGHT_MARKER, SA_MAGIC};
+pub use superblock::{SA_COPYRIGHT_MARKER, SA_MAGIC, Superblock};

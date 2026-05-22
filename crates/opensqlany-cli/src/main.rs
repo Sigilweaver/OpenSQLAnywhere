@@ -249,9 +249,10 @@ fn ap_info(path: &std::path::Path) -> Result<()> {
     println!("done.");
     println!("  learned blocks : {}", model.learned_block_count());
     println!("  total blocks   : {}", (store.page_count() + 15) / 16);
-    println!("  coverage       : {:.1}%",
-        100.0 * model.learned_block_count() as f64
-            / ((store.page_count() + 15) / 16).max(1) as f64);
+    println!(
+        "  coverage       : {:.1}%",
+        100.0 * model.learned_block_count() as f64 / ((store.page_count() + 15) / 16).max(1) as f64
+    );
     println!("  bv(block 0)    : 0x{:02X}", model.bv_at(0));
     Ok(())
 }

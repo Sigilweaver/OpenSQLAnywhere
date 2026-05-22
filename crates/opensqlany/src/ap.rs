@@ -306,9 +306,7 @@ impl ApModel {
             for si in 0..7usize {
                 let off = si * SECTOR_SIZE;
                 let sec = &bytes[off..off + SECTOR_SIZE];
-                let offset = (pn as u8)
-                    .wrapping_add(si as u8)
-                    .wrapping_sub(bias);
+                let offset = (pn as u8).wrapping_add(si as u8).wrapping_sub(bias);
 
                 // For each step, build the histogram of
                 //   M[i] = (sec[i] - offset - i*step) mod 256
