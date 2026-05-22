@@ -27,7 +27,7 @@ impl PageStore {
         if size < PAGE_SIZE as u64 {
             return Err(Error::TooSmall { size });
         }
-        if size % PAGE_SIZE as u64 != 0 {
+        if !size.is_multiple_of(PAGE_SIZE as u64) {
             return Err(Error::NotPageAligned {
                 size,
                 page_size: PAGE_SIZE,
@@ -47,7 +47,7 @@ impl PageStore {
         if size < PAGE_SIZE as u64 {
             return Err(Error::TooSmall { size });
         }
-        if size % PAGE_SIZE as u64 != 0 {
+        if !size.is_multiple_of(PAGE_SIZE as u64) {
             return Err(Error::NotPageAligned {
                 size,
                 page_size: PAGE_SIZE,

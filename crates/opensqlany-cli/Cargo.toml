@@ -6,7 +6,11 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
 authors.workspace = true
+keywords = ["sqlanywhere", "cli", "database", "sap"]
+categories = ["command-line-utilities", "database"]
 
 [[bin]]
 name = "opensqlany"
@@ -16,3 +20,6 @@ path = "src/main.rs"
 opensqlany.workspace = true
 anyhow.workspace = true
 clap.workspace = true
+
+[lints]
+workspace = true

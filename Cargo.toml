@@ -5,10 +5,18 @@ members = ["crates/opensqlany", "crates/opensqlany-cli"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.87"
 license = "Apache-2.0"
 repository = "https://github.com/Sigilweaver/OpenSQLAnywhere"
+homepage = "https://sigilweaver.app/opensqlanywhere/"
+documentation = "https://sigilweaver.app/opensqlanywhere/docs/"
+readme = "README.md"
 authors = ["Nathan Riley"]
+keywords = ["sqlanywhere", "database", "parser", "sap", "page-store"]
+categories = ["parser-implementations", "database", "command-line-utilities"]
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
 
 [workspace.dependencies]
 opensqlany = { path = "crates/opensqlany", version = "0.1.0" }
