@@ -13,8 +13,9 @@ bun run dev          # http://localhost:25814/opensqlanywhere/docs/
 
 ## Build and deploy
 
-CI auto-deploys on push to `main`. For a local deploy:
+Cloudflare deploys automatically via the GitHub App on push to `main`.
+To verify the build locally:
 
 ```sh
-bun run deploy       # builds to ./build/opensqlanywhere/docs and runs wrangler deploy
+bun run build:cloudflare
 ```
