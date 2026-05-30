@@ -1,6 +1,8 @@
 # OpenSQLAnywhere
 
 [![CI](https://github.com/Sigilweaver/OpenSQLAnywhere/actions/workflows/ci.yml/badge.svg)](https://github.com/Sigilweaver/OpenSQLAnywhere/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/opensqlany.svg)](https://crates.io/crates/opensqlany)
+[![docs.rs](https://img.shields.io/docsrs/opensqlany)](https://docs.rs/opensqlany)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Rust MSRV](https://img.shields.io/badge/rust-1.87%2B-orange.svg)](https://www.rust-lang.org)
 [![Docs](https://img.shields.io/badge/docs-sigilweaver.app-blue.svg)](https://sigilweaver.app/opensqlanywhere/docs/)
