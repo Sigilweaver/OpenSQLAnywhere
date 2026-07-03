@@ -10,7 +10,7 @@ use crate::superblock::Superblock;
 ///
 /// The whole file is read into memory on [`PageStore::open`]. This is
 /// appropriate for the file sizes the format typically produces
-/// (13–45 MiB in the QBW corpus) and keeps the API zero-copy at the
+/// (13-45 MiB in the QBW corpus) and keeps the API zero-copy at the
 /// per-page level.
 #[derive(Debug)]
 pub struct PageStore {

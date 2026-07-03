@@ -81,7 +81,7 @@ impl<'a> SlottedPage<'a> {
     ///
     /// Row boundaries are inferred from the (descending) offsets of the
     /// neighbouring slot and the start of the trailer. This is a
-    /// best-effort slicing — it does not yet decode any row header.
+    /// best-effort slicing - it does not yet decode any row header.
     pub fn row_bytes(&self) -> Vec<(u16, &'a [u8])> {
         let Some(dir) = &self.directory else {
             return Vec::new();
@@ -110,7 +110,7 @@ impl<'a> SlottedPage<'a> {
     /// Return the page-boundary overflow prefix, if present.
     ///
     /// When a QB record spans two SA17 pages the tail fragment is written at
-    /// `page[0x000..array_start)` — before the slot directory — on the page
+    /// `page[0x000..array_start)` - before the slot directory - on the page
     /// that contains the next records. No slot points to this region, so it is
     /// invisible to [`SlottedPage::row_bytes`].
     ///

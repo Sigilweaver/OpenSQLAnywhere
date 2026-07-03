@@ -8,7 +8,7 @@ const CRC_OFF: usize = 0xFFC;
 
 /// A borrowed view of a single 4 KiB page.
 ///
-/// The page is not copied — this wraps a `&[u8; PAGE_SIZE]` slice owned by
+/// The page is not copied - this wraps a `&[u8; PAGE_SIZE]` slice owned by
 /// a [`PageStore`](crate::PageStore).
 #[derive(Debug, Clone, Copy)]
 pub struct Page<'a> {
@@ -144,21 +144,21 @@ impl PageTrailer {
 /// `SPECIFICATION.md §2.2a`.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum PageType {
-    /// `'E'` (0x45) — extent / data page. ~53 % of pages in the corpus.
+    /// `'E'` (0x45) - extent / data page. ~53 % of pages in the corpus.
     Extent,
-    /// `'A'` (0x41) — allocation / free-space map. ~46 %.
+    /// `'A'` (0x41) - allocation / free-space map. ~46 %.
     Alloc,
-    /// `'M'` (0x4D) — map / metadata.
+    /// `'M'` (0x4D) - map / metadata.
     Map,
-    /// `'H'` (0x48) — header block.
+    /// `'H'` (0x48) - header block.
     Header,
-    /// `'C'` (0x43) — catalog.
+    /// `'C'` (0x43) - catalog.
     Catalog,
-    /// `'@'` (0x40) — reserved / bootstrap (pages 4..7).
+    /// `'@'` (0x40) - reserved / bootstrap (pages 4..7).
     Bootstrap,
-    /// `'I'` (0x49) — index.
+    /// `'I'` (0x49) - index.
     Index,
-    /// `'G'` (0x47) — currently unknown.
+    /// `'G'` (0x47) - currently unknown.
     UnknownG,
     /// Any other byte, retained for exhaustive classification.
     Other(u8),

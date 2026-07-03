@@ -10,10 +10,10 @@
 //! ```
 //!
 //! where:
-//! - `pn`  — zero-based page number
-//! - `si`  — sector index within the page (0..8, each sector = 512 bytes)
-//! - `i`   — byte index within the sector
-//! - `bv(bi)` — a per–16-page-block calibration byte, learned from the file
+//! - `pn` - zero-based page number
+//! - `si` - sector index within the page (0..8, each sector = 512 bytes)
+//! - `i` - byte index within the sector
+//! - `bv(bi)` - a per-16-page-block calibration byte, learned from the file
 //!
 //! `step` varies per sector and is recovered empirically by finding the
 //! candidate step value that produces the highest histogram peak in the
@@ -21,7 +21,7 @@
 //! to some repeated value, exploiting the fact that SA stores many zero bytes
 //! in padding and unused column areas).
 //!
-//! `bv` is learned from pages whose plaintext is almost entirely zero — the
+//! `bv` is learned from pages whose plaintext is almost entirely zero - the
 //! "pure AP" page types: `'@'` (0x40), `'C'` (0x43), `'H'` (0x48), and
 //! `'M'` (0x4D). For these pages the stored bytes are virtually equal to the
 //! fill, so `bv` can be back-calculated directly.
@@ -175,7 +175,7 @@ pub struct ApModel {
 impl ApModel {
     /// Construct an [`ApModel`] by scanning every pure-AP page in `store`.
     ///
-    /// Pure-AP page types — `'@'`, `'C'`, `'H'`, `'M'` — have bodies
+    /// Pure-AP page types - `'@'`, `'C'`, `'H'`, `'M'` - have bodies
     /// dominated by the AP fill (sectors 1..6 are almost entirely fill).
     /// From those sectors we can back-calculate `bv(block)` precisely.
     ///
@@ -197,7 +197,7 @@ impl ApModel {
 
             // All 8 sectors, same as the Python reference implementation.
             // For sector 7, the usable data ends at TRAILER_START (not at the
-            // end of the 512-byte sector window) — the 16-byte trailer is not
+            // end of the 512-byte sector window) - the 16-byte trailer is not
             // AP-obfuscated, so we must exclude it from purity checks.
             for si in 0..SECTORS_PER_PAGE {
                 let off = si * SECTOR_SIZE;

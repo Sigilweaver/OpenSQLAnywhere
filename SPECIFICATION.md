@@ -27,7 +27,7 @@ An SA17 page-store file is a sequence of fixed-size 4 KiB pages.
 | Page 0 | Superblock (see §3) |
 | Pages 1..N | Data / metadata / index / catalog pages |
 
-**observed** — 112 files, 456 521 pages, 100 % page-aligned.
+**observed** - 112 files, 456 521 pages, 100 % page-aligned.
 
 ## 2. Universal per-page invariants
 
@@ -44,7 +44,7 @@ page[0xFFC..0x1000] == u32_LE( crc32( page[0x0000..0x0FFC] ) )
 
 The CRC polynomial is the standard zlib / IEEE 802.3 CRC-32 (same as
 `crc32fast::hash` in Rust). The CRC is computed over the raw on-disk
-bytes — for obfuscated variants such as QBW this means the footer can
+bytes - for obfuscated variants such as QBW this means the footer can
 be validated without peeling the obfuscation layer first.
 
 ### 2.2 Twelve-byte page trailer at 0xFF0..0xFFB
@@ -116,10 +116,10 @@ reserved metadata and the hint counts data pages after them.
 
 **observed** substrings in every file in this region, in this order:
 
-- `1252LATIN1` — CHAR collation
-- `windows-1252` — CHAR codepage label
-- `UCA` — Unicode Collation Algorithm (NCHAR collation)
-- `UTF-8` — NCHAR codepage label
+- `1252LATIN1` - CHAR collation
+- `windows-1252` - CHAR codepage label
+- `UCA` - Unicode Collation Algorithm (NCHAR collation)
+- `UTF-8` - NCHAR codepage label
 
 These are standard SA17 collation record strings and their invariant
 presence is one of the strongest pieces of evidence that the payload is
@@ -138,7 +138,7 @@ repeated as a rolling cycle. The final four bytes `0xFFC..0x1000` are
 the CRC-32 footer per §2.1. The fingerprint pins the engine to
 **SAP SQL Anywhere 17.0.4 build 2182**.
 
-## 4. Pages 1..N — body layout
+## 4. Pages 1..N - body layout
 
 ### 4.1 Trailer and CRC apply universally
 
@@ -197,7 +197,7 @@ footers (§2.1) are validated; their bodies are opaque to this spec.
 | Item | Status |
 |------|--------|
 | SYSCOLUMN, SYSINDEX, SYSUSER row formats | v0.2 |
-| Typed column decoding (DECIMAL, VARCHAR, DATE, …) | v0.2+ |
+| Typed column decoding (DECIMAL, VARCHAR, DATE, ...) | v0.2+ |
 | `first_page` / `primary_root` pointers from SYSTABLE | v0.2 |
 | Multi-dbspace database (13-file) layout | later |
 | Write support | out of scope indefinitely |
