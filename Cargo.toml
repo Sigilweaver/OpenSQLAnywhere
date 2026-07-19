@@ -23,4 +23,4 @@ opensqlany = { path = "crates/opensqlany", version = "0.1.0" }
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 crc32fast = "1.4"
-thiserror = "1"
+thiserror = "2"
