@@ -6,6 +6,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `Superblock::flags_06_variant_bits` and `FLAGS_06_BASE`. `flags_06`
+  (superblock offset `0x06`) was documented as one of two magic values
+  (`0x09`/`0x49`); a QuickBooks Enterprise 24.0 file adds a third, `0x29`,
+  which is `0x09 | 0x20` - the same bit-6 relationship the original
+  `0x49 = 0x09 | 0x40` already had. Exposes it as a bitfield over
+  `FLAGS_06_BASE` instead, so a future edition setting another bit doesn't
+  need a new literal-match arm. What each bit means is still unknown.
+  Reported against [openqbw#16](https://github.com/Sigilweaver/OpenQBW/issues/16)
+  by @pete-green.
+
 ### Fixed
 
 - `PageType::from_byte` only classified uppercase page-type bytes. A

@@ -8,13 +8,26 @@ pub const SA_MAGIC: u32 = 0xDA7A_BA5E;
 /// Anywhere 17.0.4 build 2182 (2015 release).
 pub const SA_COPYRIGHT_MARKER: &[u8] = b"SAP SE, Copyright (c)2015 17.0.4.";
 
+/// Base value of [`Superblock::flags_06`] observed across the original
+/// 112-file corpus, before any variant bits are set on top of it.
+///
+/// `flags_06` reads as a bitfield over this base rather than an enum of
+/// magic values: the originally observed `0x49` is `0x09 | 0x40` (bit 6),
+/// and a QuickBooks Enterprise 24.0 file adds `0x29 = 0x09 | 0x20` (bit 5).
+/// Treat unrecognized bit combinations as unrecognized-but-valid rather
+/// than rejecting them outright - each new edition is likelier to set
+/// another bit than to replace the base value. See
+/// [`Superblock::flags_06_variant_bits`].
+pub const FLAGS_06_BASE: u8 = 0x09;
+
 /// Parsed view of the page-0 superblock.
 ///
 /// Only fields that are invariant across the 112-file corpus are named;
 /// other fields are held as raw bytes. See `SPECIFICATION.md §3`.
 #[derive(Debug, Clone, Copy)]
 pub struct Superblock {
-    /// Flag byte at offset 0x06. Observed values: `0x09`, `0x49`.
+    /// Flag byte at offset 0x06. See [`FLAGS_06_BASE`] and
+    /// [`Superblock::flags_06_variant_bits`] for how to interpret it.
     pub flags_06: u8,
     /// Low 32 bits of the per-file identifier at offset 0x08.
     pub file_id_lo: u32,
@@ -66,6 +79,19 @@ impl Superblock {
     pub fn magic_ok(&self) -> bool {
         self.magic == SA_MAGIC
     }
+
+    /// `flags_06` with [`FLAGS_06_BASE`]'s bits masked out, leaving whatever
+    /// variant bits (if any) are set on top of it.
+    ///
+    /// What any given bit *means* isn't known yet - only that bit 5 (`0x20`)
+    /// and bit 6 (`0x40`) are the two observed so far. Bit 5 was seen to
+    /// co-occur with a lowercase page-type-byte variant on one file, but
+    /// that correlation isn't confirmed as causal. See `SPECIFICATION.md`
+    /// §6 and [`PageType::from_byte`](crate::PageType::from_byte).
+    #[inline]
+    pub fn flags_06_variant_bits(&self) -> u8 {
+        self.flags_06 & !FLAGS_06_BASE
+    }
 }
 
 fn memmem(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -73,4 +99,35 @@ fn memmem(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         return None;
     }
     haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sb_with_flags(flags_06: u8) -> Superblock {
+        Superblock {
+            flags_06,
+            file_id_lo: 0,
+            format_major: 3,
+            magic: SA_MAGIC,
+            version_a: 201,
+            version_b: 12,
+            page_count_hint: 0,
+            sa_marker_present: true,
+        }
+    }
+
+    #[test]
+    fn flags_06_variant_bits_base_is_zero() {
+        assert_eq!(sb_with_flags(FLAGS_06_BASE).flags_06_variant_bits(), 0x00);
+    }
+
+    #[test]
+    fn flags_06_variant_bits_recovers_known_bits() {
+        // 0x49 = base | bit 6 (originally observed second value).
+        assert_eq!(sb_with_flags(0x49).flags_06_variant_bits(), 0x40);
+        // 0x29 = base | bit 5 (QuickBooks Enterprise 24.0, openqbw#16).
+        assert_eq!(sb_with_flags(0x29).flags_06_variant_bits(), 0x20);
+    }
 }

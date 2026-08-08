@@ -101,7 +101,7 @@ collation block (§3.3) and a rolling copyright fingerprint (§3.4).
 | Offset | Size | Type | Name | Notes |
 |-------:|-----:|------|------|-------|
 | 0x00 | 6 | zeros | `reserved_0` | always `00 00 00 00 00 00` |
-| 0x06 | 1 | u8 flag | `flags_06` | `0x09` or `0x49` |
+| 0x06 | 1 | u8 flag | `flags_06` | bitfield over base `0x09`; observed `0x09`, `0x49` (`\|0x40`), `0x29` (`\|0x20`) |
 | 0x07 | 1 | zero | `reserved_07` | always `0x00` |
 | 0x08 | 4 | u32_LE | `file_id_lo` | unique per file |
 | 0x0C | 4 | zeros | `reserved_0C` | always `00 00 00 00` |
@@ -212,7 +212,10 @@ footers (§2.1) are validated; their bodies are opaque to this spec.
 
 ## 6. Open questions
 
-- Interpretation of `flags_06` (`0x09` vs `0x49`).
+- Meaning of `flags_06`'s variant bits (bit 6 `0x40`, bit 5 `0x20` - see
+  `Superblock::flags_06_variant_bits`). Known to be a bitfield over base
+  `0x09` rather than an enum of magic values; what each bit signals is
+  still unknown.
 - Field layout of the SYSTABLE row trailer past the name column.
 - Meaning of the prelude fields before the slot array
   (`0x0404`, `0x30C6`, `0x0304`, `0x022C`, `0x0001`, `0x05B4`, ...).
