@@ -87,6 +87,13 @@ Names are working hypotheses consistent with SA's published storage
 design; the type-byte value itself is **observed**, the semantic
 interpretation is **inferred**.
 
+**observed** on a QuickBooks Desktop Enterprise 24.0 file: the same
+letters can appear **lowercase** (e.g. `'e'` 0x65 instead of `'E'`
+0x45) on otherwise-ordinary extent/data pages. Classification is
+case-insensitive; the raw byte (case included) is preserved for
+callers that want to distinguish the variant. What the case bit
+signals is not yet known - see §6.
+
 ## 3. Page-0 superblock
 
 Page 0 is the only page with extensive plaintext structure. The first
@@ -216,6 +223,24 @@ footers (§2.1) are validated; their bodies are opaque to this spec.
 - Meaning of the prelude fields before the slot array
   (`0x0404`, `0x30C6`, `0x0304`, `0x022C`, `0x0001`, `0x05B4`, ...).
 - Interior structure of `I`, `A`, `M`, `H` pages.
+- Meaning of the lowercase page-type variant (§2.3). Circumstantial
+  evidence ties it to recency (pages carrying the lowercase/`0x20` case
+  bit show a newer LSN distribution than same-type pages without it,
+  consistent with marking pages written after a checkpoint), but this
+  isn't confirmed. See [OpenSQLAnywhere#7](https://github.com/Sigilweaver/OpenSQLAnywhere/issues/7)
+  and [OpenSQLAnywhere#8](https://github.com/Sigilweaver/OpenSQLAnywhere/issues/8).
+- `ap.rs`'s per-sector `step` recovery uses histogram-peak search, but
+  on at least one file `step` shows global structure instead: values
+  repeat in pairs and shift by one sector per page
+  (`steps(pn+1)[1:] == steps(pn)[:7]` on 723/1443 adjacent trusted page
+  pairs in one sample). The per-block-pair index into that structure
+  appears permuted and wasn't recovered - borrowing a neighbouring
+  page's step sequence to decode a dense page failed 0/40 times. If the
+  keystream is genuinely global, deriving it once would be faster and
+  more robust than per-sector histogram recovery, but someone needs to
+  find the index permutation first. See
+  [OpenSQLAnywhere#8](https://github.com/Sigilweaver/OpenSQLAnywhere/issues/8)
+  (finding 3) for the full evidence and the two ruled-out approaches.
 
 ## 7. References
 

@@ -166,9 +166,15 @@ pub enum PageType {
 
 impl PageType {
     /// Map a raw byte from trailer offset `0xFF2` to a [`PageType`].
+    ///
+    /// Classification is case-insensitive: some files (observed on
+    /// QuickBooks Enterprise 24.0) carry a lowercase page-type byte (e.g.
+    /// `'e'` 0x65 rather than `'E'` 0x45) on otherwise-ordinary extent
+    /// pages. The original byte is preserved in [`PageType::Other`] so the
+    /// case distinction - which may itself be meaningful - isn't discarded.
     #[inline]
     pub fn from_byte(b: u8) -> Self {
-        match b {
+        match b.to_ascii_uppercase() {
             b'E' => PageType::Extent,
             b'A' => PageType::Alloc,
             b'M' => PageType::Map,
@@ -177,7 +183,7 @@ impl PageType {
             b'@' => PageType::Bootstrap,
             b'I' => PageType::Index,
             b'G' => PageType::UnknownG,
-            other => PageType::Other(other),
+            _ => PageType::Other(b),
         }
     }
 

@@ -6,6 +6,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `PageType::from_byte` only classified uppercase page-type bytes. A
+  QuickBooks Desktop Enterprise 24.0 file carries the same page types in
+  **lowercase** (`'e'` 0x65 instead of `'E'` 0x45) on otherwise-ordinary
+  extent/data pages; every consumer filtering on `PageType::Extent` (e.g.
+  `openqbw`'s SYSTABLE walk) silently skipped the entire data population
+  since they all landed in `PageType::Other(0x65)` instead. Classification
+  is now case-insensitive; the raw byte (case included) is still preserved
+  in `Other(_)` since the case bit itself may be meaningful. Fixes #8
+  (finding 1). Reported by @pete-green.
+- `ApModel::deobfuscate_with_store` trusted a single `bv` learned per
+  16-page block, applying it to every page in the block. That assumption
+  doesn't hold on the same Enterprise 24.0 file: across 2,920 sampled
+  pages, 394/439 blocks showed 6-8 distinct per-page `bv` values, so a
+  block's learned value (from whichever pure-AP page happened to be in
+  it) was silently wrong for most of the block's dense data pages. Added
+  `ApModel::recover_bv_for_page` (the same histogram-peak brute-force
+  search as `recover_bv_for_block`, scoped to one page) and switched
+  `deobfuscate_with_store` to resolve `bv` per page unconditionally
+  instead of trusting the block-level value. `recover_bv_for_block` and
+  the rest of the block-level API are unchanged, for callers that
+  specifically want the cheaper approximation. Fixes #8 (finding 2).
+  Reported by @pete-green.
+
 ## [0.1.0] - 2026-05-22
 
 First publication-ready release.

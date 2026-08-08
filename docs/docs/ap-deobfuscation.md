@@ -17,31 +17,36 @@ any DRM - the obfuscation is a public, deterministic byte
 transformation that the lawful owner of the file can already
 reverse via the QuickBooks application.
 
-## Detecting an AP-obfuscated file
+## Peeling the AP layer off
 
 ```rust
 use opensqlany::{ApModel, PageStore};
 
-let raw = std::fs::read("Company.QBW")?;
+let store = PageStore::open("Company.QBW")?;
+let model = ApModel::learn(&store);
 
-match ApModel::detect(&raw) {
-    Ok(model) => {
-        let plain = model.deobfuscate(raw);
-        let store = PageStore::from_bytes(plain)?;
-        // proceed as for a plaintext SA17 file
-    }
-    Err(_) => {
-        // not AP-obfuscated; try as plaintext
-        let store = PageStore::from_bytes(raw)?;
-    }
-}
+let page = store.page(1)?;
+let plain = model.deobfuscate_with_store(page.bytes(), page.index(), &store);
+// `plain` is now SA17 plaintext for this page; proceed as for a
+// plaintext SA17 file (e.g. feed it to `SlottedPage::parse` via
+// `Page::from_bytes`).
 # Ok::<(), opensqlany::Error>(())
 ```
 
-`ApModel::detect` returns an error if no plausible keystream is
-found in the first few hundred bytes (specifically, if the
-superblock magic `0xDA7ABA5E` doesn't reappear under any of the
-candidate additive progressions).
+`ApModel::learn` scans every "pure-AP" page in the store (page types
+`'@'`, `'C'`, `'H'`, `'M'`) to calibrate the per-block `bv` value used
+by the keystream formula below. It always succeeds - there is no
+separate detection step. Use the CLI's `ap-info` subcommand to check
+how many blocks were calibrated directly (`learned_block_count`) versus
+falling back to on-demand recovery (`deobfuscate_with_store`) or the
+block-0 approximation (`deobfuscate`).
+
+`bv` is constant per 16-page block on the original corpus, but not on
+every file - some QuickBooks Enterprise 24.0 files vary `bv` from page
+to page within a block. `deobfuscate_with_store` always resolves `bv`
+for the specific page being decoded rather than trusting its block's
+learned value, so it stays correct either way; only the cheaper
+block-only `deobfuscate` is affected by this.
 
 ## Companion: OpenQBW
 
