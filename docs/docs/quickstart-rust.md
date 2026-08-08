@@ -29,16 +29,20 @@ fn main() -> Result<(), opensqlany::Error> {
 ## Working with deobfuscated input
 
 If your input is a QuickBooks `.QBW` file, peel the additive-progression
-layer off first:
+layer off per page before parsing it:
 
 ```rust
 use opensqlany::{ApModel, PageStore};
 
-let raw = std::fs::read("Company.QBW")?;
-let model = ApModel::detect(&raw)?;
-let plaintext = model.deobfuscate(raw);
-let store = PageStore::from_bytes(plaintext)?;
-// ...same iteration as above
+let store = PageStore::open("Company.QBW")?;
+let model = ApModel::learn(&store);
+
+for page in store.pages().skip(1) {
+    let plain = model.deobfuscate_with_store(page.bytes(), page.index(), &store);
+    let page_type = opensqlany::PageType::from_byte(plain[0xFF2]);
+    println!("page {} type {:?}", page.index(), page_type);
+    // ...pass `plain` to opensqlany::Page::from_bytes / SlottedPage::parse
+}
 # Ok::<(), opensqlany::Error>(())
 ```
 

@@ -68,6 +68,8 @@ page-type histogram:
 
 $ opensqlany dump-page database.db 0
 $ opensqlany slots database.db 2
+$ opensqlany ap-info Company.QBW
+$ opensqlany deob Company.QBW 2
 ```
 
 ## Relationship to OpenQBW

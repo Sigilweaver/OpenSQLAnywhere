@@ -43,3 +43,22 @@ Parse the slotted-page row directory on a catalog page and print
 ```console
 $ opensqlany slots database.db 2
 ```
+
+## ap-info
+
+Learn the additive-progression (AP) deobfuscation model for a store
+and report calibration coverage (see
+[AP deobfuscation](./ap-deobfuscation.md)).
+
+```console
+$ opensqlany ap-info Company.QBW
+```
+
+## deob
+
+Deobfuscate a single page and hex-dump the plaintext. Pass `--raw`
+to dump the obfuscated bytes instead.
+
+```console
+$ opensqlany deob Company.QBW 2
+```
