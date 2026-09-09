@@ -89,8 +89,8 @@ fn inspect(path: &std::path::Path, verify_crc: bool) -> Result<()> {
         sb.format_major, sb.version_a, sb.version_b
     );
     println!(
-        "flags_06 / file_id: 0x{:02X} / 0x{:08X}",
-        sb.flags_06, sb.file_id_lo
+        "flags_06 / cur LSN: 0x{:02X} / {} (0x{:08X})",
+        sb.flags_06, sb.current_lsn, sb.current_lsn
     );
     println!(
         "page_count_hint   : {} (total - hint = {})",
@@ -163,13 +163,13 @@ fn dump_page(path: &std::path::Path, pn: u64) -> Result<()> {
     let t = page.trailer();
 
     println!(
-        "page {pn}  type {:?}  (0x{:02X})  flags_ff0/1 = {:02X}/{:02X}  meta = {:02X}/{:02X}",
+        "page {pn}  type {:?}  (0x{:02X})  flags_ff0/1 = {:02X}/{:02X}  lsn = {} (0x{:08X})",
         t.page_type(),
         t.page_type_raw,
         t.flag_ff0,
         t.flag_ff1,
-        t.meta_ff4,
-        t.meta_ff5,
+        t.lsn,
+        t.lsn,
     );
     println!(
         "crc stored = 0x{:08X}  computed = 0x{:08X}  {}",

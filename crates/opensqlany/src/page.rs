@@ -58,10 +58,18 @@ impl<'a> Page<'a> {
             flag_ff1: t[1],
             page_type_raw: t[2],
             zero_ff3: t[3],
-            meta_ff4: t[4],
-            meta_ff5: t[5],
-            zero_ff6: [t[6], t[7], t[8], t[9], t[10], t[11]],
+            lsn: u32::from_le_bytes([t[4], t[5], t[6], t[7]]),
+            zero_ff8: [t[8], t[9], t[10], t[11]],
         }
+    }
+
+    /// Log sequence number of this page's last write, from trailer
+    /// `0xFF4..0xFF8`.
+    ///
+    /// Shorthand for `self.trailer().lsn`. See [`PageTrailer::lsn`].
+    #[inline]
+    pub fn lsn(&self) -> u32 {
+        self.trailer().lsn
     }
 
     /// CRC-32 stored in the footer at `0xFFC..0x1000` (little-endian).
@@ -99,11 +107,13 @@ impl<'a> Page<'a> {
 
     /// Returns `Ok(())` if the trailer's reserved-zero regions are zero.
     ///
-    /// Observed across 456 409 pages of 112 files: byte `0xFF3` and bytes
-    /// `0xFF6..0xFFB` are always zero on pages with a non-zero body.
+    /// The reserved regions are byte `0xFF3` and bytes `0xFF8..0xFFB`.
+    /// Bytes `0xFF6..0xFF7` were previously checked as reserved too, but
+    /// they are the high half of [`PageTrailer::lsn`] and are non-zero on
+    /// any file whose LSN has passed 65 535 - which rejected valid pages.
     pub fn verify_trailer(&self) -> Result<()> {
         let t = self.trailer();
-        if t.zero_ff3 == 0 && t.zero_ff6 == [0; 6] {
+        if t.zero_ff3 == 0 && t.zero_ff8 == [0; 4] {
             Ok(())
         } else {
             Err(Error::BadTrailer { page: self.index })
@@ -122,12 +132,15 @@ pub struct PageTrailer {
     pub page_type_raw: u8,
     /// Byte at 0xFF3. Reserved, always 0x00.
     pub zero_ff3: u8,
-    /// Byte at 0xFF4. Per-type variable.
-    pub meta_ff4: u8,
-    /// Byte at 0xFF5. Per-type variable.
-    pub meta_ff5: u8,
-    /// Bytes at 0xFF6..0xFFB. Reserved, always zero.
-    pub zero_ff6: [u8; 6],
+    /// u32_LE at 0xFF4..0xFF8 - the log sequence number of the page's
+    /// last write.
+    ///
+    /// The per-file maximum tracks the u32 at superblock offset `0x08`
+    /// ([`Superblock::current_lsn`](crate::Superblock::current_lsn)) minus
+    /// ten. See `SPECIFICATION.md §2.2a`.
+    pub lsn: u32,
+    /// Bytes at 0xFF8..0xFFB. Reserved, always zero.
+    pub zero_ff8: [u8; 4],
 }
 
 impl PageTrailer {
