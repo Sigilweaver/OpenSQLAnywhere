@@ -6,6 +6,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** the page trailer's `0xFF4..0xFF8` region is a 32-bit
+  little-endian log sequence number, not two loose metadata bytes
+  followed by six reserved-zero bytes. `PageTrailer::meta_ff4`,
+  `meta_ff5` and `zero_ff6` are replaced by `PageTrailer::lsn: u32` and
+  `PageTrailer::zero_ff8: [u8; 4]`, and `Superblock::file_id_lo` is
+  renamed `Superblock::current_lsn` - it is the file's current LSN, not
+  the low half of a per-file identifier. Three in-file relationships
+  support the reading: the highest per-page LSN is exactly ten less than
+  the superblock value on every file measured, superblock `0x0C` (which a
+  64-bit identifier would need) is always zero, and pages carrying the
+  `0x20` case bit have a substantially newer LSN distribution. Documented
+  in `SPECIFICATION.md` §2.2a and §3.1a. Fixes #7, reported with the
+  supporting measurements by @pete-green.
+- `opensqlany inspect` prints the superblock LSN in place of `file_id`,
+  and `dump-page` prints the page LSN in place of the two `meta` bytes.
+
+### Added
+
+- `Page::lsn()`, shorthand for `page.trailer().lsn`.
+
+### Fixed
+
+- `verify_trailer` rejected valid pages once a file's LSN passed 65 535,
+  because bytes `0xFF6..0xFF7` - the high half of the LSN - were checked
+  as reserved-zero. They read as zero across the original 112-file
+  corpus only because none of those files had an LSN that large. The
+  reserved regions checked are now `0xFF3` and `0xFF8..0xFFB`.
+
 ## [0.1.1] - 2026-08-12
 
 ### Added
@@ -67,5 +97,6 @@ First publication-ready release.
 - `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`.
 - Documentation site at <https://sigilweaver.app/opensqlanywhere/docs/>.
 
-[Unreleased]: https://github.com/Sigilweaver/OpenSQLAnywhere/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Sigilweaver/OpenSQLAnywhere/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/Sigilweaver/OpenSQLAnywhere/releases/tag/v0.1.1
 [0.1.0]: https://github.com/Sigilweaver/OpenSQLAnywhere/releases/tag/v0.1.0

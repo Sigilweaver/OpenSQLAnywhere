@@ -9,21 +9,31 @@ const PAGE_SZ: usize = 4096;
 /// Build a page with the requested page type and fill byte, then stamp
 /// a valid CRC-32 footer.
 fn make_page(page_type: u8, fill: u8) -> [u8; PAGE_SZ] {
+    make_page_with_lsn(page_type, fill, 0)
+}
+
+/// As [`make_page`], but with an explicit page LSN at `0xFF4..0xFF8`.
+fn make_page_with_lsn(page_type: u8, fill: u8, lsn: u32) -> [u8; PAGE_SZ] {
     let mut page = [fill; PAGE_SZ];
     // trailer
     page[0xFF0] = 0x00; // flag_ff0
     page[0xFF1] = 0x00; // flag_ff1
     page[0xFF2] = page_type;
     page[0xFF3] = 0x00; // reserved
-    page[0xFF4] = 0x00;
-    page[0xFF5] = 0x00;
-    for b in &mut page[0xFF6..0xFFC] {
+    page[0xFF4..0xFF8].copy_from_slice(&lsn.to_le_bytes());
+    for b in &mut page[0xFF8..0xFFC] {
         *b = 0;
     }
     // CRC footer
     let crc = crc32fast::hash(&page[..0xFFC]);
     page[0xFFC..0x1000].copy_from_slice(&crc.to_le_bytes());
     page
+}
+
+/// Restamp the CRC footer after mutating a page in place.
+fn restamp_crc(page: &mut [u8; PAGE_SZ]) {
+    let crc = crc32fast::hash(&page[..0xFFC]);
+    page[0xFFC..0x1000].copy_from_slice(&crc.to_le_bytes());
 }
 
 fn make_superblock() -> [u8; PAGE_SZ] {
@@ -58,6 +68,7 @@ fn superblock_detects_magic_and_marker() {
     assert_eq!(sb.version_a, 201);
     assert_eq!(sb.version_b, 12);
     assert!(sb.sa_marker_present);
+    assert_eq!(sb.current_lsn, 0xDEAD_BEEF);
 }
 
 #[test]
@@ -115,4 +126,41 @@ fn page_type_roundtrip() {
         let pt = PageType::from_byte(b);
         assert_eq!(pt.as_byte(), b);
     }
+}
+
+#[test]
+fn page_lsn_is_a_full_u32() {
+    // 0x0012_3456 needs bytes 0xFF6..0xFF7, which used to be checked as
+    // reserved-zero: a page this far into a file's life was rejected.
+    let mut bytes = Vec::with_capacity(PAGE_SZ * 2);
+    bytes.extend_from_slice(&make_superblock());
+    bytes.extend_from_slice(&make_page_with_lsn(b'E', 0, 0x0012_3456));
+
+    let store = PageStore::from_bytes(bytes).unwrap();
+    let page = store.page(1).unwrap();
+
+    assert_eq!(page.lsn(), 0x0012_3456);
+    assert_eq!(page.trailer().lsn, 0x0012_3456);
+    page.verify_trailer()
+        .expect("a >16-bit LSN is not a trailer failure");
+}
+
+#[test]
+fn non_zero_reserved_ff8_is_rejected() {
+    let mut bytes = Vec::with_capacity(PAGE_SZ * 2);
+    bytes.extend_from_slice(&make_superblock());
+    let mut p = make_page(b'E', 0);
+    p[0xFF9] = 0x01; // inside the reserved region proper
+    restamp_crc(&mut p);
+    bytes.extend_from_slice(&p);
+
+    let store = PageStore::from_bytes(bytes).unwrap();
+    let page = store.page(1).unwrap();
+
+    page.verify_crc().expect("crc is still valid");
+    assert!(matches!(
+        page.verify_trailer().unwrap_err(),
+        opensqlany::Error::BadTrailer { page: 1 }
+    ));
+    assert_eq!(page.trailer().zero_ff8, [0x00, 0x01, 0x00, 0x00]);
 }

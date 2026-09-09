@@ -63,10 +63,45 @@ be validated without peeling the obfuscation layer first.
 | 0xFF1  | 1 | `flag_ff1` | almost always `0x00` |
 | 0xFF2  | 1 | **`page_type`** | ASCII letter; see §2.3 |
 | 0xFF3  | 1 | `zero_ff3` | always `0x00` |
-| 0xFF4  | 1 | `meta_ff4` | per-type variable byte |
-| 0xFF5  | 1 | `meta_ff5` | per-type variable byte |
-| 0xFF6  | 6 | `zero_ff6` | always six zero bytes |
+| 0xFF4  | 4 | **`lsn`** | u32_LE log sequence number; see §2.2a |
+| 0xFF8  | 4 | `zero_ff8` | always four zero bytes |
 | 0xFFC  | 4 | `crc32_le` | see §2.1 |
+
+### 2.2a Page LSN at 0xFF4..0xFF8
+
+**observed**: the four bytes at `0xFF4` are a little-endian u32 carrying
+the log sequence number of the page's last write, not two loose metadata
+bytes followed by six reserved zeros.
+
+The field is genuinely 32 bits wide. It reads as reserved-zero above
+`0xFF5` only on files whose LSN has never exceeded 65 535, which is true
+of the entire original 112-file corpus - hence the earlier
+"six zero bytes" invariant. On larger files bytes `0xFF6..0xFF7` carry
+the high half, and treating them as reserved rejects valid pages.
+
+Three independent in-file relationships support the reading (measured by
+an independent reader across three files, reported in
+[opensqlany#7](https://github.com/Sigilweaver/OpenSQLAnywhere/issues/7)):
+
+1. The maximum per-page value is exactly ten less than the u32 at
+   superblock `0x08` (§3.1a):
+
+   | file | superblock `0x08` | max page `0xFF4` | difference |
+   |---|---:|---:|---:|
+   | sample A | 35 800 | 35 790 | 10 |
+   | sample B | 1 848 242 | 1 848 232 | 10 |
+   | production file | 747 273 956 | 747 273 946 | 10 |
+
+2. Superblock `0x0C`, which a 64-bit file identifier would need, is zero
+   in all three files.
+3. Pages carrying the `0x20` case bit in their page-type byte (§2.3) have
+   a substantially newer LSN distribution than pages without it.
+
+**Inferred**: the constant offset of ten is a fixed reservation between
+the file's current LSN and the highest LSN actually stamped on a page,
+and the case-bit correlation in (3) marks pages written after a
+checkpoint. Neither is confirmed. What the reserved four bytes at
+`0xFF8` are for is still unknown.
 
 ### 2.3 Page-type alphabet
 
@@ -109,7 +144,7 @@ collation block (§3.3) and a rolling copyright fingerprint (§3.4).
 | 0x00 | 6 | zeros | `reserved_0` | always `00 00 00 00 00 00` |
 | 0x06 | 1 | u8 flag | `flags_06` | bitfield over base `0x09`; observed `0x09`, `0x49` (`\|0x40`), `0x29` (`\|0x20`) |
 | 0x07 | 1 | zero | `reserved_07` | always `0x00` |
-| 0x08 | 4 | u32_LE | `file_id_lo` | unique per file |
+| 0x08 | 4 | u32_LE | `current_lsn` | file's current LSN; see §3.1a |
 | 0x0C | 4 | zeros | `reserved_0C` | always `00 00 00 00` |
 | 0x10 | 4 | u32_LE | `format_major` | always `3` |
 | 0x14 | 4 | u32_LE | **`magic`** | always `0xDA7ABA5E` |
@@ -118,6 +153,15 @@ collation block (§3.3) and a rolling copyright fingerprint (§3.4).
 | 0x1C | 4 | u32_LE | `page_count_hint` | typically `total_pages - 128` |
 | 0x2D | 3 | const | `const_2D` | always `0D 04 00` |
 | 0x30 | 16 | zeros | `reserved_30` | always 16 zero bytes |
+
+### 3.1a Current LSN at 0x08
+
+**observed**: the u32 at `0x08` is the file's current log sequence
+number, not the low half of a per-file identifier. It is unique per file
+in practice, which is what the identifier reading was based on, but it
+behaves as a write counter: it is exactly ten greater than the highest
+per-page LSN in every file measured (§2.2a), and the four bytes at `0x0C`
+that a 64-bit identifier would occupy are always zero.
 
 ### 3.2 Page-count hint
 

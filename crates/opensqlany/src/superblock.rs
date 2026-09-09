@@ -29,8 +29,14 @@ pub struct Superblock {
     /// Flag byte at offset 0x06. See [`FLAGS_06_BASE`] and
     /// [`Superblock::flags_06_variant_bits`] for how to interpret it.
     pub flags_06: u8,
-    /// Low 32 bits of the per-file identifier at offset 0x08.
-    pub file_id_lo: u32,
+    /// u32_LE at offset 0x08 - the file's current log sequence number.
+    ///
+    /// Previously read as the low half of a per-file identifier. It is a
+    /// write counter: across every file measured, the highest per-page
+    /// [`PageTrailer::lsn`](crate::PageTrailer::lsn) is exactly this value
+    /// minus ten, and offset `0x0C` - which a 64-bit identifier would need
+    /// - is always zero. See `SPECIFICATION.md §3.1a`.
+    pub current_lsn: u32,
     /// u32_LE at offset 0x10. Always `3` in the corpus.
     pub format_major: u32,
     /// u32_LE at offset 0x14.
@@ -53,7 +59,7 @@ impl Superblock {
         assert_eq!(page0.len(), PAGE_SIZE, "page 0 must be exactly 4096 bytes");
 
         let flags_06 = page0[0x06];
-        let file_id_lo = u32::from_le_bytes(page0[0x08..0x0C].try_into().unwrap());
+        let current_lsn = u32::from_le_bytes(page0[0x08..0x0C].try_into().unwrap());
         let format_major = u32::from_le_bytes(page0[0x10..0x14].try_into().unwrap());
         let magic = u32::from_le_bytes(page0[0x14..0x18].try_into().unwrap());
         let version_a = u16::from_le_bytes(page0[0x18..0x1A].try_into().unwrap());
@@ -64,7 +70,7 @@ impl Superblock {
 
         Superblock {
             flags_06,
-            file_id_lo,
+            current_lsn,
             format_major,
             magic,
             version_a,
@@ -108,7 +114,7 @@ mod tests {
     fn sb_with_flags(flags_06: u8) -> Superblock {
         Superblock {
             flags_06,
-            file_id_lo: 0,
+            current_lsn: 0,
             format_major: 3,
             magic: SA_MAGIC,
             version_a: 201,
