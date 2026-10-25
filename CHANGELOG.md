@@ -6,6 +6,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- AP deobfuscation no longer guesses. `bv` and each sector's step are chosen
+  deterministically and accepted only with confirming evidence; otherwise
+  `ApModel::deobfuscate` returns `Error::KeystreamUnverified`,
+  `Error::AmbiguousCalibration` or `Error::LowConfidenceKeystream`, or under
+  `Leniency::KEYSTREAM` flags the result with a `Warning`. Previously a
+  tie between calibration votes was broken by hash order (the same page
+  decoded two different ways in 10 of 20 runs), a page whose padding is not
+  zero decoded shifted by a constant, and a sector with no dominant byte
+  decoded to garbage, all without any signal.
+- `ApModel::learn` returns `Error::NoCalibration` or `Error::NotObfuscated`
+  instead of falling back to `bv = 0`, and counts lowercase pure-AP pages
+  (`'c'`, `'h'`, `'m'`, `` '`' ``) as calibration input.
+- `ApModel::deobfuscate` takes the page from the store it decodes, so
+  `raw` and `pn` can no longer disagree, and returns `Error::PageOutOfRange`
+  and `Error::StoreMismatch` instead of substituting `bv = 0`.
+
+### Added
+
+- `DeobfuscatedPage::confidence()` (`Confidence`), `evidence()` (`Evidence`)
+  and `SectorFit::{exact, confident}`.
+- `Evidence::TrailerRowCount`: the row count in a slotted page's prelude
+  must equal the plaintext trailer's count byte (`0xFF0`). It is the
+  independent check that confirms `bv` on pages whose padding is not zero.
+
+### Behavior changes
+
+- Strict decoding rejects pages that decoded silently before. On the
+  112-file corpus, 87 % of `A` pages and 41 % of `E` pages decode in strict
+  mode; the rest need `Leniency::KEYSTREAM`, which reports the affected
+  sectors. See the pull request for the breakdown by error kind.
+
 ### Changed
 
 - **Breaking:** the API is reshaped so later fixes ship without another

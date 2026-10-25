@@ -283,6 +283,17 @@ footers (§2.1) are validated; their bodies are opaque to this spec.
   [OpenSQLAnywhere#8](https://github.com/Sigilweaver/OpenSQLAnywhere/issues/8)
   (finding 3) for the full evidence and the two ruled-out approaches.
 
+- Trailer byte `0xFF0` equals the u16 slot count stored four or six bytes
+  before the slot array on 101,337 of 140,000 `E` pages that have a
+  directory (112-file corpus). The decoder uses it to confirm `bv`; pages
+  with another prelude layout do not match.
+- `bv` is not constant per 16-page block even on the original corpus: some
+  blocks switch by a small delta (for example `0x64` to `0x66`) part way
+  through. Steps follow a sliding window: within a block, page `q` uses
+  values from a 12-entry list, repeated in pairs and shifted one sector per
+  page. That reading predicts held-out strong sectors correctly 99.5 % of
+  the time when unanimous but breaks at phase changes, so it is not used.
+
 ## 7. References
 
 - SAP SQL Anywhere 17.0.01 product documentation:
