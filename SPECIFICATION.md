@@ -285,11 +285,14 @@ footers (§2.1) are validated; their bodies are opaque to this spec.
 
 - Trailer byte `0xFF0` equals the u16 slot count stored four or six bytes
   before the slot array on 101,337 of 140,000 `E` pages that have a
-  directory (112-file corpus). The decoder uses it to confirm `bv`; pages
+  directory (112-file corpus). The decoder uses it to confirm `bv` for
+  counts of four or more; for a count of 1 or 2 the pair `(count, 0)` is the
+  commonest word in page data and a match was wrong on 5 of 887 pages. Pages
   with another prelude layout do not match.
-- `bv` is not constant per 16-page block even on the original corpus: some
-  blocks switch by a small delta (for example `0x64` to `0x66`) part way
-  through. Steps follow a sliding window: within a block, page `q` uses
+- `bv` is not constant per 16-page block even on the original corpus: about
+  a third of blocks (32 % of 28,225, in 93 of 112 files) hold more than one
+  `bv`, typically switching by a small delta (for example `0x64` to `0x66`)
+  part way through, so a block is not evidence for a page's `bv`. Steps follow a sliding window: within a block, page `q` uses
   values from a 12-entry list, repeated in pairs and shifted one sector per
   page. That reading predicts held-out strong sectors correctly 99.5 % of
   the time when unanimous but breaks at phase changes, so it is not used.

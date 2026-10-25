@@ -31,13 +31,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Evidence::TrailerRowCount`: the row count in a slotted page's prelude
   must equal the plaintext trailer's count byte (`0xFF0`). It is the
   independent check that confirms `bv` on pages whose padding is not zero.
+  It needs a count of four or more, and a page where exact sectors or a
+  block anchor point at another `bv` is `AmbiguousCalibration`.
+- `DeobfuscatedPage::unallocated()`: an all-zero page was never written and
+  is returned as it is, with `BvSource::Unallocated`, instead of being run
+  through the keystream guesser.
+- `ApModel::deobfuscate_with_bv` refuses a `bv` that the page does not
+  support (`KeystreamUnverified`, or a warning under `Leniency::KEYSTREAM`).
 
 ### Behavior changes
 
 - Strict decoding rejects pages that decoded silently before. On the
-  112-file corpus, 87 % of `A` pages and 41 % of `E` pages decode in strict
+  112-file corpus, 82 % of `A` pages and 26 % of `E` pages decode in strict
   mode; the rest need `Leniency::KEYSTREAM`, which reports the affected
-  sectors. See the pull request for the breakdown by error kind.
+  sectors. A calibrated page elsewhere in the same 16-page block with the
+  same `bv` is reported (`Evidence::BlockAnchor`) but is not confirmation:
+  about a third of blocks hold more than one `bv`. See the pull request for
+  the breakdown by error kind.
+- `BvSource` is `TrailerRowCount`, `ExactSectors`, `Histogram`, `Supplied` or
+  `Unallocated`; `Confidence::Verified` means only the trailer check (or an
+  unallocated page).
 
 ### Changed
 
