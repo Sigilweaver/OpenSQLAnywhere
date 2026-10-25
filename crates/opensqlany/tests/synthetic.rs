@@ -2,7 +2,7 @@
 //! SA17 on-disk invariants (CRC footer, 12-byte trailer, magic, etc.).
 //! These do not require any real `.db` or `.qbw` corpus.
 
-use opensqlany::{PAGE_SIZE, PageStore, PageType, SA_MAGIC, Superblock};
+use opensqlany::{ErrorKind, PAGE_SIZE, PageStore, PageType, SA_MAGIC, Superblock};
 
 const PAGE_SZ: usize = 4096;
 
@@ -62,13 +62,13 @@ fn page_size_is_4096() {
 #[test]
 fn superblock_detects_magic_and_marker() {
     let page0 = make_superblock();
-    let sb = Superblock::parse(&page0);
+    let sb = Superblock::parse(&page0).unwrap();
     assert!(sb.magic_ok());
-    assert_eq!(sb.format_major, 3);
-    assert_eq!(sb.version_a, 201);
-    assert_eq!(sb.version_b, 12);
-    assert!(sb.sa_marker_present);
-    assert_eq!(sb.current_lsn, 0xDEAD_BEEF);
+    assert_eq!(sb.format_major(), 3);
+    assert_eq!(sb.version_a(), 201);
+    assert_eq!(sb.version_b(), 12);
+    assert!(sb.sa_marker_present());
+    assert_eq!(sb.current_lsn(), 0xDEAD_BEEF);
 }
 
 #[test]
@@ -86,6 +86,7 @@ fn page_store_iterates_and_validates_crc() {
 
     let mut types = Vec::new();
     for page in store.pages().skip(1) {
+        let page = page.unwrap();
         page.verify_crc().expect("crc matches");
         page.verify_trailer().expect("trailer ok");
         types.push(page.trailer().page_type());
@@ -140,7 +141,7 @@ fn page_lsn_is_a_full_u32() {
     let page = store.page(1).unwrap();
 
     assert_eq!(page.lsn(), 0x0012_3456);
-    assert_eq!(page.trailer().lsn, 0x0012_3456);
+    assert_eq!(page.trailer().lsn(), 0x0012_3456);
     page.verify_trailer()
         .expect("a >16-bit LSN is not a trailer failure");
 }
@@ -162,5 +163,66 @@ fn non_zero_reserved_ff8_is_rejected() {
         page.verify_trailer().unwrap_err(),
         opensqlany::Error::BadTrailer { page: 1 }
     ));
-    assert_eq!(page.trailer().zero_ff8, [0x00, 0x01, 0x00, 0x00]);
+    assert_eq!(page.trailer().raw()[8..12], [0x00, 0x01, 0x00, 0x00]);
+}
+
+#[test]
+fn error_kinds_group_failures() {
+    let err = PageStore::from_bytes(vec![0u8; 128]).unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Format);
+    assert_eq!(err.page(), None);
+
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&make_superblock());
+    let mut p = make_page(b'E', 0);
+    p[0xFFC] ^= 0xFF;
+    bytes.extend_from_slice(&p);
+    let store = PageStore::from_bytes(bytes).unwrap();
+    let err = store.page(1).unwrap().verify_crc().unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::Integrity);
+    assert_eq!(err.page(), Some(1));
+}
+
+#[test]
+fn unknown_type_bytes_are_other() {
+    assert_eq!(PageType::from_byte(b'G'), PageType::Other(b'G'));
+    assert_eq!(PageType::from_byte(b'e'), PageType::Extent);
+}
+
+#[test]
+fn case_variant_is_reported_by_the_trailer() {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&make_superblock());
+    bytes.extend_from_slice(&make_page(b'e', 0));
+    bytes.extend_from_slice(&make_page(b'E', 0));
+    let store = PageStore::from_bytes(bytes).unwrap();
+    assert!(store.page(1).unwrap().trailer().case_variant());
+    assert!(!store.page(2).unwrap().trailer().case_variant());
+    assert_eq!(
+        store.page(1).unwrap().trailer().page_type(),
+        PageType::Extent
+    );
+}
+
+#[test]
+fn page_from_bytes_rejects_wrong_lengths() {
+    use opensqlany::{Error, Page};
+    assert!(matches!(
+        Page::from_bytes(0, &[0u8; 100]),
+        Err(Error::WrongBufferLength { .. })
+    ));
+    assert!(matches!(
+        Page::from_bytes(0, &vec![0u8; 2 * PAGE_SZ]),
+        Err(Error::WrongBufferLength { .. })
+    ));
+}
+
+#[test]
+fn leniency_flags_combine() {
+    use opensqlany::{Leniency, ReadOptions};
+    assert!(ReadOptions::default().leniency.is_strict());
+    let l = Leniency::KEYSTREAM | Leniency::DIRECTORY;
+    assert!(l.contains(Leniency::KEYSTREAM));
+    assert!(!l.contains(Leniency::INTEGRITY));
+    assert!(ReadOptions::lenient().leniency.contains(l));
 }

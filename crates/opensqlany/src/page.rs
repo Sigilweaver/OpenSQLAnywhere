@@ -19,22 +19,21 @@ pub struct Page<'a> {
 impl<'a> Page<'a> {
     /// Construct a `Page` view over an explicit byte slice.
     ///
-    /// Useful for callers that have already obtained plaintext bytes
-    /// (e.g. via [`ApModel::deobfuscate_with_store`](crate::ApModel::deobfuscate_with_store))
-    /// and want to drive the slotted-page parser without round-tripping
-    /// through a [`PageStore`](crate::PageStore). `bytes` must be exactly
-    /// [`PAGE_SIZE`] long; longer slices are truncated and shorter slices
-    /// panic.
-    pub fn from_bytes(index: u64, bytes: &'a [u8]) -> Self {
-        assert!(
-            bytes.len() >= PAGE_SIZE,
-            "Page::from_bytes requires at least {PAGE_SIZE} bytes (got {})",
-            bytes.len()
-        );
-        Page {
-            index,
-            bytes: &bytes[..PAGE_SIZE],
+    /// Useful for callers that already hold the bytes of a page (for
+    /// example the plaintext from
+    /// [`DeobfuscatedPage`](crate::DeobfuscatedPage)) and want to drive the
+    /// slotted-page parser without a [`PageStore`](crate::PageStore).
+    /// `bytes` must be exactly [`PAGE_SIZE`] long; any other length is
+    /// [`Error::WrongBufferLength`], so a multi-page buffer is never
+    /// silently cut to its first page.
+    pub fn from_bytes(index: u64, bytes: &'a [u8]) -> Result<Self> {
+        if bytes.len() != PAGE_SIZE {
+            return Err(Error::WrongBufferLength {
+                expected: PAGE_SIZE,
+                got: bytes.len(),
+            });
         }
+        Ok(Page { index, bytes })
     }
 
     /// Zero-based page number within the store.
@@ -52,24 +51,18 @@ impl<'a> Page<'a> {
     /// The 12-byte page trailer at offsets `0xFF0..0xFFB`.
     #[inline]
     pub fn trailer(&self) -> PageTrailer {
-        let t = &self.bytes[TRAILER_OFF..CRC_OFF];
-        PageTrailer {
-            flag_ff0: t[0],
-            flag_ff1: t[1],
-            page_type_raw: t[2],
-            zero_ff3: t[3],
-            lsn: u32::from_le_bytes([t[4], t[5], t[6], t[7]]),
-            zero_ff8: [t[8], t[9], t[10], t[11]],
-        }
+        let mut raw = [0u8; 12];
+        raw.copy_from_slice(&self.bytes[TRAILER_OFF..CRC_OFF]);
+        PageTrailer { raw }
     }
 
     /// Log sequence number of this page's last write, from trailer
     /// `0xFF4..0xFF8`.
     ///
-    /// Shorthand for `self.trailer().lsn`. See [`PageTrailer::lsn`].
+    /// Shorthand for `self.trailer().lsn()`. See [`PageTrailer::lsn`].
     #[inline]
     pub fn lsn(&self) -> u32 {
-        self.trailer().lsn
+        self.trailer().lsn()
     }
 
     /// CRC-32 stored in the footer at `0xFFC..0x1000` (little-endian).
@@ -84,6 +77,10 @@ impl<'a> Page<'a> {
     }
 
     /// CRC-32 (zlib/IEEE) computed over bytes `0..0xFFC`.
+    ///
+    /// For an AP-obfuscated store the CRC covers the stored (obfuscated)
+    /// bytes, so it checks the page's integrity, not a deobfuscation
+    /// guess.
     #[inline]
     pub fn computed_crc(&self) -> u32 {
         crc32fast::hash(&self.bytes[..CRC_OFF])
@@ -112,8 +109,7 @@ impl<'a> Page<'a> {
     /// they are the high half of [`PageTrailer::lsn`] and are non-zero on
     /// any file whose LSN has passed 65 535 - which rejected valid pages.
     pub fn verify_trailer(&self) -> Result<()> {
-        let t = self.trailer();
-        if t.zero_ff3 == 0 && t.zero_ff8 == [0; 4] {
+        if self.trailer().reserved_zero() {
             Ok(())
         } else {
             Err(Error::BadTrailer { page: self.index })
@@ -122,40 +118,73 @@ impl<'a> Page<'a> {
 }
 
 /// Parsed view of the 12-byte trailer at offsets `0xFF0..0xFFB`.
+///
+/// Accessors are named by meaning rather than by byte offset. [`raw`] is the
+/// offset-neutral escape hatch for bytes whose meaning is not yet known.
+///
+/// [`raw`]: PageTrailer::raw
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct PageTrailer {
-    /// Byte at 0xFF0. Per-type variable.
-    pub flag_ff0: u8,
-    /// Byte at 0xFF1. Almost always 0x00.
-    pub flag_ff1: u8,
+    raw: [u8; 12],
+}
+
+impl PageTrailer {
+    /// The 12 trailer bytes as stored.
+    #[inline]
+    pub fn raw(&self) -> [u8; 12] {
+        self.raw
+    }
+
     /// Raw page-type byte at 0xFF2 (ASCII).
-    pub page_type_raw: u8,
-    /// Byte at 0xFF3. Reserved, always 0x00.
-    pub zero_ff3: u8,
+    #[inline]
+    pub fn page_type_raw(&self) -> u8 {
+        self.raw[2]
+    }
+
+    /// Classify [`Self::page_type_raw`] into a known [`PageType`].
+    #[inline]
+    pub fn page_type(&self) -> PageType {
+        PageType::from_byte(self.page_type_raw())
+    }
+
+    /// `true` when the page-type byte carries the lowercase (0x20) case bit.
+    ///
+    /// Pages with the bit set show a newer LSN distribution than the same
+    /// type without it; see `SPECIFICATION.md` section 2.3 and 6. What it
+    /// means is not confirmed.
+    #[inline]
+    pub fn case_variant(&self) -> bool {
+        let b = self.page_type_raw();
+        b.is_ascii_lowercase()
+    }
+
     /// u32_LE at 0xFF4..0xFF8 - the log sequence number of the page's
     /// last write.
     ///
     /// The per-file maximum tracks the u32 at superblock offset `0x08`
     /// ([`Superblock::current_lsn`](crate::Superblock::current_lsn)) minus
-    /// ten. See `SPECIFICATION.md §2.2a`.
-    pub lsn: u32,
-    /// Bytes at 0xFF8..0xFFB. Reserved, always zero.
-    pub zero_ff8: [u8; 4],
-}
-
-impl PageTrailer {
-    /// Classify [`Self::page_type_raw`] into a known [`PageType`].
+    /// ten. See `SPECIFICATION.md` section 2.2a.
     #[inline]
-    pub fn page_type(&self) -> PageType {
-        PageType::from_byte(self.page_type_raw)
+    pub fn lsn(&self) -> u32 {
+        u32::from_le_bytes([self.raw[4], self.raw[5], self.raw[6], self.raw[7]])
+    }
+
+    /// `true` iff the reserved-zero bytes (`0xFF3` and `0xFF8..0xFFB`) are
+    /// all zero.
+    #[inline]
+    pub fn reserved_zero(&self) -> bool {
+        self.raw[3] == 0 && self.raw[8..12] == [0; 4]
     }
 }
 
 /// Known page types, from the byte at trailer offset `0xFF2`.
 ///
 /// Names reflect the working hypothesis from corpus analysis; see
-/// `SPECIFICATION.md §2.2a`.
+/// `SPECIFICATION.md` section 2.2a. New variants are added in minor
+/// releases as page types are understood; match with a wildcard arm.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum PageType {
     /// `'E'` (0x45) - extent / data page. ~53 % of pages in the corpus.
     Extent,
@@ -171,9 +200,8 @@ pub enum PageType {
     Bootstrap,
     /// `'I'` (0x49) - index.
     Index,
-    /// `'G'` (0x47) - currently unknown.
-    UnknownG,
-    /// Any other byte, retained for exhaustive classification.
+    /// Any other byte, including types whose role is not yet known (for
+    /// example `'G'`), retained for exhaustive classification.
     Other(u8),
 }
 
@@ -183,8 +211,8 @@ impl PageType {
     /// Classification is case-insensitive: some files (observed on
     /// QuickBooks Enterprise 24.0) carry a lowercase page-type byte (e.g.
     /// `'e'` 0x65 rather than `'E'` 0x45) on otherwise-ordinary extent
-    /// pages. The original byte is preserved in [`PageType::Other`] so the
-    /// case distinction - which may itself be meaningful - isn't discarded.
+    /// pages. The case distinction - which may itself be meaningful - is
+    /// available from [`PageTrailer::case_variant`].
     #[inline]
     pub fn from_byte(b: u8) -> Self {
         match b.to_ascii_uppercase() {
@@ -195,7 +223,6 @@ impl PageType {
             b'C' => PageType::Catalog,
             b'@' => PageType::Bootstrap,
             b'I' => PageType::Index,
-            b'G' => PageType::UnknownG,
             _ => PageType::Other(b),
         }
     }
@@ -210,12 +237,11 @@ impl PageType {
             PageType::Catalog => "catalog",
             PageType::Bootstrap => "bootstrap",
             PageType::Index => "index",
-            PageType::UnknownG => "unknown_G",
             PageType::Other(_) => "other",
         }
     }
 
-    /// The raw byte at trailer offset `0xFF2`.
+    /// The raw byte at trailer offset `0xFF2` (upper case for known types).
     pub fn as_byte(&self) -> u8 {
         match self {
             PageType::Extent => b'E',
@@ -225,7 +251,6 @@ impl PageType {
             PageType::Catalog => b'C',
             PageType::Bootstrap => b'@',
             PageType::Index => b'I',
-            PageType::UnknownG => b'G',
             PageType::Other(b) => *b,
         }
     }

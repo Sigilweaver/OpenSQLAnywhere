@@ -82,6 +82,11 @@ impl PageStore {
     }
 
     /// Iterate over every page in order, starting at page 0.
+    ///
+    /// Items are `Result`s so an error is delivered to the caller instead of
+    /// ending the iteration early. The iterator returns raw physical
+    /// pages: it does not skip free or superseded pages and does not verify
+    /// the CRC (see [`Page::verify_crc`]).
     pub fn pages(&self) -> Pages<'_> {
         Pages {
             store: self,
@@ -96,7 +101,7 @@ impl PageStore {
         let sb = self.try_superblock()?;
         if !sb.magic_ok() {
             return Err(Error::BadMagic {
-                got: sb.magic,
+                got: sb.magic(),
                 want: crate::superblock::SA_MAGIC,
             });
         }
@@ -107,7 +112,7 @@ impl PageStore {
     /// when inspecting files that might not be SA17.
     pub fn try_superblock(&self) -> Result<Superblock> {
         let page0 = self.page(0)?;
-        Ok(Superblock::parse(page0.bytes()))
+        Superblock::parse(page0.bytes())
     }
 }
 
@@ -119,13 +124,13 @@ pub struct Pages<'a> {
 }
 
 impl<'a> Iterator for Pages<'a> {
-    type Item = Page<'a>;
+    type Item = Result<Page<'a>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.next >= self.store.page_count() {
             return None;
         }
-        let page = self.store.page(self.next).ok()?;
+        let page = self.store.page(self.next);
         self.next += 1;
         Some(page)
     }
