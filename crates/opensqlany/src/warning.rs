@@ -15,7 +15,6 @@ pub struct Warning {
     pub sector: Option<usize>,
 }
 
-#[allow(dead_code)] // constructors are used once the decoders emit warnings
 impl Warning {
     /// A warning of `kind` that is not yet tied to a page or sector.
     ///
