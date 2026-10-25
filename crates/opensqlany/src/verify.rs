@@ -4,7 +4,7 @@
 //! independent of the histogram that produced the guess, agrees with it.
 
 use crate::page::PAGE_SIZE;
-use crate::slotted::find_slot_directory;
+use crate::slotted::scanned_directory;
 
 /// Smallest trailer count the check trusts. For a count of 1 or 2 the pair
 /// `(count, 0)` is the commonest word in page data, so a match carries almost
@@ -32,7 +32,7 @@ pub(crate) fn trailer_row_count_matches(plain: &[u8]) -> bool {
     if count < MIN_TRAILER_COUNT {
         return false;
     }
-    let Some(dir) = find_slot_directory(plain) else {
+    let Some(dir) = scanned_directory(plain) else {
         return false;
     };
     let start = dir.array_start();

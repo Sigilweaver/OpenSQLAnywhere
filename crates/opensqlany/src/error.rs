@@ -221,6 +221,8 @@ pub enum Error {
         found: usize,
         /// Entries the prelude declares.
         expected: usize,
+        /// Byte offset of the first entry that was not valid.
+        stopped_at: usize,
     },
 
     /// The bytes before the slot directory could not be interpreted.
