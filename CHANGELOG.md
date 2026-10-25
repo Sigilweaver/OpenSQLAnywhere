@@ -24,8 +24,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `raw` and `pn` can no longer disagree, and returns `Error::PageOutOfRange`
   and `Error::StoreMismatch` instead of substituting `bv = 0`.
 
+- `SlottedPage::parse` reads the slot count from the page prelude and takes
+  exactly that many entries, confirmed against the plaintext trailer's count
+  byte. Previously the directory was a best-of-0x300 scan: a stray value
+  after a zero gap became a slot, pages with fewer than 8 rows returned no
+  rows, directories past the search window or after an out-of-order entry
+  lost their tail, and a row offset inside the directory itself produced a
+  row over the page header. These are now `Error::NoSlotDirectory`,
+  `AmbiguousSlotDirectory`, `SlotDirectoryTruncated` and
+  `SlotOffsetInDirectory`, or warnings under `Leniency::DIRECTORY`.
+
 ### Added
 
+- `SlotDirectory::declared_count()` and `SlottedPage::warnings()`.
 - `DeobfuscatedPage::confidence()` (`Confidence`), `evidence()` (`Evidence`)
   and `SectorFit::{exact, confident}`.
 - `Evidence::TrailerRowCount`: the row count in a slotted page's prelude
@@ -52,10 +63,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same `bv` is reported (`Evidence::BlockAnchor`) but is not confirmation:
   about a third of blocks hold more than one `bv`. See the pull request for
   the breakdown by error kind.
-- `BvSource` is `TrailerRowCount`, `ExactSectors`, `Histogram`, `Supplied` or
-  `Unallocated`; `Confidence::Verified` means only the trailer check. An unallocated page
+- `BvSource` is `TrailerRowCount`, `ExactSectors`, `Corroborated`,
+  `Histogram`, `Supplied` or `Unallocated`; `Confidence::Verified` means only the trailer check. An unallocated page
   is `Confidence::Unallocated` and `DeobfuscatedPage::bv()` is `None`: it was
   never keyed.
+- `SlottedPage::parse` fails on pages whose slot directory the prelude does
+  not confirm (about a fifth of `E` pages with a directory in the sampled
+  corpus) unless `Leniency::DIRECTORY` is set.
 
 ### Changed
 

@@ -39,6 +39,9 @@ enum Cmd {
         file: PathBuf,
         /// Zero-based page number.
         page: u64,
+        /// Show directories the page prelude does not confirm.
+        #[arg(long)]
+        lenient: bool,
     },
     /// Summarise the AP deobfuscation model learned from a page store.
     ApInfo {
@@ -69,7 +72,11 @@ fn main() -> Result<()> {
     match cli.cmd {
         Cmd::Inspect { file, verify_crc } => inspect(&file, verify_crc),
         Cmd::DumpPage { file, page } => dump_page(&file, page),
-        Cmd::Slots { file, page } => slots(&file, page),
+        Cmd::Slots {
+            file,
+            page,
+            lenient,
+        } => slots(&file, page, lenient),
         Cmd::ApInfo { file, lenient } => ap_info(&file, lenient),
         Cmd::Deob {
             file,
@@ -204,10 +211,10 @@ fn dump_page(path: &std::path::Path, pn: u64) -> Result<()> {
     Ok(())
 }
 
-fn slots(path: &std::path::Path, pn: u64) -> Result<()> {
+fn slots(path: &std::path::Path, pn: u64, lenient: bool) -> Result<()> {
     let store = PageStore::open(path)?;
     let page = store.page(pn)?;
-    let slotted = SlottedPage::parse(page, &ReadOptions::default())?;
+    let slotted = SlottedPage::parse(page, &read_options(lenient))?;
     let t = page.trailer();
 
     println!("page {pn}  type {:?}", t.page_type());
@@ -225,6 +232,13 @@ fn slots(path: &std::path::Path, pn: u64) -> Result<()> {
                 dir.live_count(),
                 dir.deleted_count(),
             );
+            match dir.declared_count() {
+                Some(n) => println!("declared count: {n} (confirmed by the trailer)"),
+                None => println!("declared count: none (directory found by scanning)"),
+            }
+            for w in slotted.warnings() {
+                println!("warning: {w}");
+            }
             if let Some(min) = dir.min_offset() {
                 println!("min row offset: 0x{:04X}", min);
             }
