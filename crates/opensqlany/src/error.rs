@@ -23,6 +23,10 @@ pub enum ErrorKind {
     /// The input is a page store this reader does not support (format
     /// version).
     Unsupported,
+    /// The caller passed something that does not match the store: a page
+    /// number outside it, a buffer of the wrong length, or a model learned
+    /// from another store.
+    Usage,
     /// The AP keystream could not be determined with enough confidence.
     Keystream,
     /// A page's internal structure (slot directory, prelude) could not be
@@ -242,9 +246,8 @@ impl Error {
             Error::NotPageAligned { .. }
             | Error::TooSmall { .. }
             | Error::ShortRead { .. }
-            | Error::WrongBufferLength { .. }
-            | Error::PageOutOfRange { .. }
             | Error::BadMagic { .. } => ErrorKind::Format,
+            Error::WrongBufferLength { .. } | Error::PageOutOfRange { .. } => ErrorKind::Usage,
             Error::UnsupportedVersion { .. } => ErrorKind::Unsupported,
             Error::BadCrc { .. } | Error::BadTrailer { .. } => ErrorKind::Integrity,
             Error::NoCalibration

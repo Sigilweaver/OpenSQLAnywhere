@@ -22,7 +22,7 @@
 //!
 //! # Scope
 //!
-//! This release (v0.1) covers the **page-store layer only**: opening a file,
+//! This crate covers the **page-store layer only**: opening a file,
 //! iterating pages, validating integrity, classifying pages by type,
 //! decoding slotted-page directories, and removing the AP fill cipher.
 //! System catalog parsing (`SYSTABLE`/`SYSCOLUMN`/`SYSINDEX` rows and
