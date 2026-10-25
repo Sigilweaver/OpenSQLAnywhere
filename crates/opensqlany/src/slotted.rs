@@ -34,6 +34,10 @@ const MIN_LIVE_SLOTS: usize = 8;
 /// Unconfirmed candidates with fewer live slots than this are treated as
 /// noise: random in-range descending u16 runs of this length are rare.
 const MIN_EVIDENCE_SLOTS: usize = 4;
+/// Smallest declared count the prelude can confirm. The pair `(1, 0)` or
+/// `(2, 0)` is among the commonest words in page data: asking for a directory
+/// of count 1 finds one on 63 % of genuine pages with 12 or more rows.
+const MIN_CONFIRMED_COUNT: usize = 4;
 
 /// Decoded slot directory.
 #[derive(Debug, Clone)]
@@ -82,6 +86,15 @@ impl SlotDirectory {
     /// the directory. `None` means the directory was found by scanning.
     pub fn declared_count(&self) -> Option<usize> {
         self.declared
+    }
+
+    /// Live offsets that point into the directory itself, `array_start <= o <
+    /// end`. Offsets below `array_start` are legitimate rows: catalog rows can
+    /// sit between the page header and the directory.
+    fn offsets_inside(&self) -> Vec<u16> {
+        self.live_slots()
+            .filter(|&o| (self.array_start..self.end).contains(&(o as usize)))
+            .collect()
     }
 
     /// Minimum live row offset, if any.
@@ -152,48 +165,74 @@ impl<'a> SlottedPage<'a> {
         let lenient = opts.leniency.contains(Leniency::DIRECTORY);
         let plain = page.bytes();
         let pn = page.index();
-        let mut warnings = Vec::new();
+        let count = plain[TRAILER_START] as usize;
+        let mut warnings: Vec<Warning> = Vec::new();
+        let mut warn = |kind: WarningKind| warnings.push(Warning::new(kind).on_page(pn));
 
-        let confirmed = match confirmed_directory(plain, pn) {
-            Ok(found) => found,
-            Err(
-                e @ (Error::SlotDirectoryTruncated { .. } | Error::AmbiguousSlotDirectory { .. }),
-            ) => {
-                if !lenient {
-                    return Err(e);
-                }
-                let code = match e {
-                    Error::SlotDirectoryTruncated { .. } => "slot-directory-truncated",
-                    _ => "slot-directory-ambiguous",
-                };
-                warnings.push(Warning::new(WarningKind::Other(code)).on_page(pn));
-                None
-            }
-            Err(e) => return Err(e),
-        };
-
-        let directory = match confirmed {
-            Some(dir) => Some(dir),
-            None => match scanned_directory(plain) {
-                None => None,
-                Some(dir) => {
-                    let live = dir.live_count();
-                    let reason = if live < MIN_LIVE_SLOTS {
-                        "fewer than 8 live slots and no confirming prelude"
-                    } else {
-                        "not confirmed by the page prelude"
-                    };
-                    if !lenient {
-                        return Err(Error::NoSlotDirectory { page: pn, reason });
+        let directory = if (1..MIN_CONFIRMED_COUNT).contains(&count) {
+            // A count of 1 to 3 matches the commonest words in page data, so a
+            // directory cannot be confirmed from it.
+            let mut found = prelude_candidates(plain, count).found;
+            if !lenient {
+                return Err(if found.is_empty() {
+                    Error::UnknownPrelude { page: pn }
+                } else {
+                    Error::NoSlotDirectory {
+                        page: pn,
+                        reason: "a declared count below 4 cannot be confirmed",
                     }
-                    warnings.push(Warning::new(WarningKind::UnverifiedDirectory).on_page(pn));
-                    Some(dir)
+                });
+            }
+            match found.len() {
+                0 => {
+                    warn(WarningKind::UnknownPrelude);
+                    None
                 }
-            },
+                1 => {
+                    warn(WarningKind::UnverifiedDirectory);
+                    found.pop()
+                }
+                _ => {
+                    warn(WarningKind::AmbiguousSlotDirectory);
+                    None
+                }
+            }
+        } else if count >= MIN_CONFIRMED_COUNT {
+            let mut cands = prelude_candidates(plain, count);
+            match cands.found.len() {
+                1 => cands.found.pop(),
+                0 => {
+                    if let Some((found, stopped_at)) = cands.truncated {
+                        if !lenient {
+                            return Err(Error::SlotDirectoryTruncated {
+                                page: pn,
+                                found,
+                                expected: count,
+                                stopped_at,
+                            });
+                        }
+                        warn(WarningKind::SlotDirectoryTruncated {
+                            found,
+                            expected: count,
+                        });
+                    }
+                    unconfirmed(plain, pn, lenient, true, &mut warn)?
+                }
+                _ => {
+                    if !lenient {
+                        return Err(Error::AmbiguousSlotDirectory { page: pn });
+                    }
+                    warn(WarningKind::AmbiguousSlotDirectory);
+                    unconfirmed(plain, pn, lenient, true, &mut warn)?
+                }
+            }
+        } else {
+            unconfirmed(plain, pn, lenient, false, &mut warn)?
         };
 
         if let Some(dir) = &directory {
-            if let Some(off) = dir.live_slots().find(|&o| (o as usize) < dir.end) {
+            let inside = dir.offsets_inside();
+            if let Some(&off) = inside.first() {
                 if !lenient {
                     return Err(Error::SlotOffsetInDirectory {
                         page: pn,
@@ -201,8 +240,9 @@ impl<'a> SlottedPage<'a> {
                         directory_end: dir.end,
                     });
                 }
-                warnings
-                    .push(Warning::new(WarningKind::Other("slot-offset-in-directory")).on_page(pn));
+                warn(WarningKind::SlotOffsetsInDirectory {
+                    dropped: inside.len(),
+                });
             }
         }
         Ok(SlottedPage {
@@ -240,11 +280,10 @@ impl<'a> SlottedPage<'a> {
         };
         let bytes = self.page.bytes();
 
-        // An offset inside the directory is never a row (lenient reads only).
-        let mut live: Vec<u16> = dir
-            .live_slots()
-            .filter(|&o| o as usize >= dir.end)
-            .collect();
+        // An offset inside the directory is never a row (lenient reads only,
+        // and `parse` reports their number). Offsets below the array are rows.
+        let inside = dir.offsets_inside();
+        let mut live: Vec<u16> = dir.live_slots().filter(|o| !inside.contains(o)).collect();
         live.sort_unstable();
 
         let mut out = Vec::with_capacity(live.len());
@@ -298,18 +337,25 @@ fn read_declared(plain: &[u8], start: usize, count: usize) -> (Vec<u16>, bool) {
     (slots, true)
 }
 
+struct PreludeCandidates {
+    /// Directories read whole through the prelude layouts.
+    found: Vec<SlotDirectory>,
+    /// The longest array that starts like a directory but breaks before the
+    /// declared count: entries read, and the byte offset where it broke.
+    truncated: Option<(usize, usize)>,
+}
+
 /// Directories whose prelude count equals the trailer's count byte.
 ///
 /// The count sits in a u16 four bytes before the array, or six bytes before
-/// it when a zero word precedes the array. Only counts up to 255 can match
-/// the one-byte trailer value.
-fn confirmed_directory(plain: &[u8], pn: u64) -> Result<Option<SlotDirectory>> {
-    let count = plain[TRAILER_START] as usize;
-    if count == 0 {
-        return Ok(None);
-    }
+/// it when a zero word precedes it. Only counts up to 255 can match the
+/// one-byte trailer value.
+fn prelude_candidates(plain: &[u8], count: usize) -> PreludeCandidates {
     let mut found: Vec<SlotDirectory> = Vec::new();
-    let mut truncated: Option<usize> = None;
+    let mut truncated: Option<(usize, usize)> = None;
+    if count == 0 {
+        return PreludeCandidates { found, truncated };
+    }
     for field in 0..SEARCH_LIMIT {
         if field + 2 > TRAILER_START || u16le(plain, field) as usize != count {
             continue;
@@ -320,40 +366,63 @@ fn confirmed_directory(plain: &[u8], pn: u64) -> Result<Option<SlotDirectory>> {
             if gap == 6 && u16le(plain, field + 4) != 0 {
                 continue;
             }
-            // A zero word between the count and the array in the four-byte
-            // layout would be a deleted slot, which is handled by reading.
             let (slots, complete) = read_declared(plain, start, count);
+            // A real array starts with its highest offset, a live slot.
+            if !slots.first().is_some_and(|&s| s != 0) {
+                continue;
+            }
             if complete {
-                // A real array starts with its highest offset, a live slot.
-                if slots.first().is_some_and(|&s| s != 0) {
-                    found.push(SlotDirectory {
-                        array_start: start,
-                        end: start + 2 * count,
-                        slots,
-                        declared: Some(count),
-                    });
-                }
-            } else if slots.first().is_some_and(|&s| s != 0)
-                && slots.iter().filter(|&&s| s != 0).count() >= MIN_EVIDENCE_SLOTS
+                found.push(SlotDirectory {
+                    array_start: start,
+                    end: start + 2 * count,
+                    slots,
+                    declared: Some(count),
+                });
+            } else if slots.iter().filter(|&&s| s != 0).count() >= MIN_EVIDENCE_SLOTS
+                && truncated.is_none_or(|(n, _)| slots.len() > n)
             {
-                truncated = Some(truncated.map_or(slots.len(), |t| t.max(slots.len())));
+                truncated = Some((slots.len(), start + 2 * slots.len()));
             }
         }
     }
     // The same array can be read through both layouts; keep distinct starts.
     found.sort_by_key(|d| d.array_start);
     found.dedup_by_key(|d| d.array_start);
-    match found.len() {
-        0 => match truncated {
-            Some(n) => Err(Error::SlotDirectoryTruncated {
-                page: pn,
-                found: n,
-                expected: count,
-            }),
-            None => Ok(None),
-        },
-        1 => Ok(found.pop()),
-        _ => Err(Error::AmbiguousSlotDirectory { page: pn }),
+    PreludeCandidates { found, truncated }
+}
+
+/// No prelude-confirmed directory: the scan heuristic's candidate is an
+/// error unless lenient, and nothing at all on a page that declared rows is
+/// an unrecognised prelude.
+fn unconfirmed(
+    plain: &[u8],
+    pn: u64,
+    lenient: bool,
+    declared: bool,
+    warn: &mut impl FnMut(WarningKind),
+) -> Result<Option<SlotDirectory>> {
+    match scanned_directory(plain) {
+        Some(dir) => {
+            let reason = if dir.live_count() < MIN_LIVE_SLOTS {
+                "fewer than 8 live slots and no confirming prelude"
+            } else {
+                "not confirmed by the page prelude"
+            };
+            if !lenient {
+                return Err(Error::NoSlotDirectory { page: pn, reason });
+            }
+            warn(WarningKind::UnverifiedDirectory);
+            Ok(Some(dir))
+        }
+        None if declared => {
+            if !lenient {
+                return Err(Error::UnknownPrelude { page: pn });
+            }
+            warn(WarningKind::UnknownPrelude);
+            Ok(None)
+        }
+        // The page declares no rows and nothing looks like a directory.
+        None => Ok(None),
     }
 }
 
@@ -529,7 +598,8 @@ mod tests {
                 Error::SlotDirectoryTruncated {
                     page: 7,
                     found: 9,
-                    expected: 12
+                    expected: 12,
+                    stopped_at: 0x92,
                 }
             ),
             "{err:?}"
@@ -572,6 +642,80 @@ mod tests {
     }
 
     #[test]
+    fn small_declared_counts_are_not_confirmed() {
+        // Review B2: for a count of 1 or 2 the pair (count, 0) is the commonest
+        // word in page data, so "a directory of that count follows" held on
+        // most pages and produced a bogus row.
+        let p = page_with(0x80, &descending(2), 2);
+        let err = parse(&p, &ReadOptions::default()).unwrap_err();
+        assert!(
+            matches!(err, Error::NoSlotDirectory { page: 7, .. }),
+            "{err:?}"
+        );
+        let (dir, warnings) = parse(&p, &lenient()).unwrap();
+        assert_eq!(dir.unwrap().live_count(), 2);
+        assert_eq!(warnings, 1);
+
+        // A page full of `01 00` words and descending values: every position
+        // is a candidate, none can be trusted.
+        let mut noisy = vec![0u8; PAGE_SIZE];
+        for k in 0..60usize {
+            noisy[0x40 + 8 * k..0x40 + 8 * k + 2].copy_from_slice(&1u16.to_le_bytes());
+            let off = 0xF00u16 - 0x30 * k as u16;
+            noisy[0x44 + 8 * k..0x44 + 8 * k + 2].copy_from_slice(&off.to_le_bytes());
+        }
+        noisy[TRAILER_START] = 1;
+        assert!(parse(&noisy, &ReadOptions::default()).is_err());
+        let (dir, warnings) = parse(&noisy, &lenient()).unwrap();
+        assert!(dir.is_none());
+        assert_eq!(warnings, 1);
+    }
+
+    #[test]
+    fn declared_rows_without_a_directory_are_not_silently_none() {
+        // Review S5: count 9 and no layout matched returned Ok(None).
+        let mut p = vec![0u8; PAGE_SIZE];
+        p[TRAILER_START] = 9;
+        let err = parse(&p, &ReadOptions::default()).unwrap_err();
+        assert!(matches!(err, Error::UnknownPrelude { page: 7 }), "{err:?}");
+        let sp = SlottedPage::parse(Page::from_bytes(7, &p).unwrap(), &lenient()).unwrap();
+        assert!(sp.directory().is_none());
+        assert!(matches!(sp.warnings()[0].kind, WarningKind::UnknownPrelude));
+    }
+
+    #[test]
+    fn rows_below_the_directory_are_rows() {
+        // Review S4: the in-directory test was `offset < end`, which also
+        // rejected rows that sit below the array (catalog rows at 0x2a..).
+        let mut slots = descending(8);
+        slots[6] = 0x90;
+        slots[7] = 0x2A;
+        let p = page_with(0x1A0, &slots, 8);
+        let sp =
+            SlottedPage::parse(Page::from_bytes(7, &p).unwrap(), &ReadOptions::default()).unwrap();
+        assert_eq!(sp.rows().len(), 8);
+        assert!(sp.rows().iter().any(|r| r.offset() == 0x2A));
+        assert!(sp.warnings().is_empty());
+    }
+
+    #[test]
+    fn lenient_reads_count_the_rows_they_leave_out() {
+        // Review S4: lenient mode dropped rows with a warning that had no
+        // count.
+        let mut slots = descending(8);
+        slots[6] = 0x84;
+        slots[7] = 0x82;
+        let p = page_with(0x80, &slots, 8);
+        let page = Page::from_bytes(7, &p).unwrap();
+        let sp = SlottedPage::parse(page, &lenient()).unwrap();
+        assert_eq!(sp.rows().len(), 6);
+        assert!(matches!(
+            sp.warnings()[0].kind,
+            WarningKind::SlotOffsetsInDirectory { dropped: 2 }
+        ));
+    }
+
+    #[test]
     fn deleted_slots_are_zero_entries_within_the_declared_count() {
         let mut slots = descending(10);
         slots[4] = 0;
@@ -610,5 +754,12 @@ mod lenient_tests {
         let sp = SlottedPage::parse(page, &opts).unwrap();
         assert_eq!(sp.directory().unwrap().live_count(), 10);
         assert_eq!(sp.warnings().len(), 2);
+        assert!(matches!(
+            sp.warnings()[0].kind,
+            WarningKind::SlotDirectoryTruncated {
+                found: 10,
+                expected: 14
+            }
+        ));
     }
 }

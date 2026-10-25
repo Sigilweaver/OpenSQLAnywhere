@@ -31,8 +31,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rows, directories past the search window or after an out-of-order entry
   lost their tail, and a row offset inside the directory itself produced a
   row over the page header. These are now `Error::NoSlotDirectory`,
-  `AmbiguousSlotDirectory`, `SlotDirectoryTruncated` and
-  `SlotOffsetInDirectory`, or warnings under `Leniency::DIRECTORY`.
+  `AmbiguousSlotDirectory`, `SlotDirectoryTruncated` (with the entries read,
+  the count declared and the offset where the array broke),
+  `SlotOffsetInDirectory` and `UnknownPrelude`, or typed warnings under
+  `Leniency::DIRECTORY`, with the number of rows left out.
+- A declared count below four cannot be confirmed: the pair `(1, 0)` or
+  `(2, 0)` is among the commonest words in page data. Such a page is an error
+  in strict mode and a directory with a warning under `Leniency::DIRECTORY`.
+- A page whose trailer declares rows but whose prelude matches no layout is
+  `Error::UnknownPrelude`; `Ok` with no directory now means the page
+  declares no rows and nothing looks like a directory.
+- Row offsets below the directory's first entry are rows. Only offsets inside
+  the directory itself are rejected.
 
 ### Added
 
