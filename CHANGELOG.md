@@ -44,8 +44,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Row offsets below the directory's first entry are rows. Only offsets inside
   the directory itself are rejected.
 
+- `PageStore::open` validates the superblock: the magic, the `(3, 201, 12)`
+  format triple and the `flags_06` base bits. Any page-aligned file used to
+  open. `PageStore::open_unchecked` keeps the inspection path. A read that
+  returns fewer bytes than the file size is `Error::ShortRead`.
+- Calibration and deobfuscation check each page's CRC and trailer. A bad
+  page is `Error::BadCrc` / `Error::BadTrailer`, or a warning under
+  `Leniency::INTEGRITY`, and bad pages are left out of calibration and
+  counted in `LearnReport::bad_pages`. All-zero pages are unallocated, not
+  corrupt.
+- The CLI exits non-zero when `inspect` finds a magic mismatch, an
+  unsupported format, or CRC or trailer failures, and when `dump-page` finds
+  a CRC mismatch. `deob` prints the `bv` source, confidence, evidence and
+  per-sector peaks; `deob`, `ap-info` and `slots` take `--lenient`.
+
 ### Added
 
+- `PageStore::open_with`, `from_bytes_with`, `open_unchecked`,
+  `from_bytes_unchecked`, `page_verified`, `verified_pages` and
+  `consistency` (`Consistency`: page-count hint and LSN against the pages
+  present, reported rather than enforced).
+- `Page::is_unallocated()`.
 - `SlotDirectory::declared_count()` and `SlottedPage::warnings()`.
 - `DeobfuscatedPage::confidence()` (`Confidence`), `evidence()` (`Evidence`)
   and `SectorFit::{exact, confident}`.
@@ -77,6 +96,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Histogram`, `Supplied` or `Unallocated`; `Confidence::Verified` means only the trailer check. An unallocated page
   is `Confidence::Unallocated` and `DeobfuscatedPage::bv()` is `None`: it was
   never keyed.
+- `PageStore::open` rejects files that are not SA17 build 2182 stores.
+  All 112 corpus files still open.
 - `SlottedPage::parse` fails on pages whose slot directory the prelude does
   not confirm (about a fifth of `E` pages with a directory in the sampled
   corpus) unless `Leniency::DIRECTORY` is set.

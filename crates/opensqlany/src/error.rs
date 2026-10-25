@@ -118,6 +118,13 @@ pub enum Error {
         b: u16,
     },
 
+    /// `flags_06` lacks the base bits every SA17 file carries.
+    #[error("unsupported superblock flags 0x{flags_06:02X}")]
+    UnsupportedFlags {
+        /// The byte at superblock offset 0x06.
+        flags_06: u8,
+    },
+
     /// Per-page CRC-32 footer did not match the computed value.
     #[error("crc mismatch on page {page}: stored 0x{stored:08X}, computed 0x{computed:08X}")]
     #[non_exhaustive]
@@ -254,7 +261,9 @@ impl Error {
             | Error::ShortRead { .. }
             | Error::BadMagic { .. } => ErrorKind::Format,
             Error::WrongBufferLength { .. } | Error::PageOutOfRange { .. } => ErrorKind::Usage,
-            Error::UnsupportedVersion { .. } => ErrorKind::Unsupported,
+            Error::UnsupportedVersion { .. } | Error::UnsupportedFlags { .. } => {
+                ErrorKind::Unsupported
+            }
             Error::BadCrc { .. } | Error::BadTrailer { .. } => ErrorKind::Integrity,
             Error::NoCalibration
             | Error::NotObfuscated
