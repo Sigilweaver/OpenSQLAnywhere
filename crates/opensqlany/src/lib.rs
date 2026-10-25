@@ -10,9 +10,19 @@
 //! * [`SlottedPage`]: descending row-offset-array catalog-page parser.
 //! * [`ApModel`]: arithmetic-progression stream-cipher deobfuscation.
 //!
+//! # Errors, options and warnings
+//!
+//! Every decoding entry point returns [`Result`]. Reads are strict by
+//! default: input the reader cannot decode with confidence is an
+//! [`Error`]. [`ReadOptions`] carries a [`Leniency`] set that turns named
+//! families of errors into [`Warning`]s on the returned result. [`Error`],
+//! [`WarningKind`], [`PageType`] and the result types are
+//! `#[non_exhaustive]`, so new variants and fields are added in minor
+//! releases.
+//!
 //! # Scope
 //!
-//! This release (v0.1) covers the **page-store layer only**: opening a file,
+//! This crate covers the **page-store layer only**: opening a file,
 //! iterating pages, validating integrity, classifying pages by type,
 //! decoding slotted-page directories, and removing the AP fill cipher.
 //! System catalog parsing (`SYSTABLE`/`SYSCOLUMN`/`SYSINDEX` rows and
@@ -28,6 +38,7 @@
 //! assert!(sb.magic_ok());
 //!
 //! for (pn, page) in store.pages().enumerate().skip(1) {
+//!     let page = page?;
 //!     let trailer = page.trailer();
 //!     page.verify_crc()?;
 //!     println!("page {pn}: type {:?}", trailer.page_type());
@@ -40,14 +51,20 @@
 
 mod ap;
 mod error;
+mod options;
 mod page;
 mod slotted;
 mod store;
 mod superblock;
+mod warning;
 
-pub use ap::{ApModel, SECTOR_SIZE, SECTORS_PER_PAGE};
-pub use error::{Error, Result};
+pub use ap::{
+    ApModel, BvSource, DeobfuscatedPage, LearnReport, SECTOR_SIZE, SECTORS_PER_PAGE, SectorFit,
+};
+pub use error::{Error, ErrorKind, Result};
+pub use options::{Leniency, ReadOptions};
 pub use page::{PAGE_SIZE, Page, PageTrailer, PageType};
-pub use slotted::{SlotDirectory, SlottedPage};
+pub use slotted::{Row, SlotDirectory, SlottedPage};
 pub use store::{PageStore, Pages};
-pub use superblock::{SA_COPYRIGHT_MARKER, SA_MAGIC, Superblock};
+pub use superblock::{FLAGS_06_BASE, FormatVersion, SA_COPYRIGHT_MARKER, SA_MAGIC, Superblock};
+pub use warning::{Warning, WarningKind};

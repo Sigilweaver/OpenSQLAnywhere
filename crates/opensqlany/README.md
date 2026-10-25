@@ -8,7 +8,7 @@ No SAP code or binaries are included.
 
 ```toml
 [dependencies]
-opensqlany = "0.1"
+opensqlany = "0.2"
 ```
 
 ## What it does
@@ -19,29 +19,29 @@ opensqlany = "0.1"
 - Classify pages by type (`'E'` extent, `'A'` alloc, `'I'` index, ...)
 - Parse the superblock (magic, format version triple)
 - Parse slotted-page row directories (`'E'` and `'C'` pages)
-- Expose page-boundary row-overflow prefixes
 - Remove the additive-progression (AP) fill obfuscation used in QuickBooks `.qbw` files
 
 ## Quick start
 
 ```rust
-use opensqlany::{ApModel, PageStore};
+use opensqlany::{ApModel, PageStore, ReadOptions};
 
 let store = PageStore::open("company.qbw")?;
-let model = ApModel::learn(&store);
+let opts = ReadOptions::default(); // strict: errors on anything unconfirmed
+let model = ApModel::learn(&store, &opts)?;
 
 for page in store.pages().skip(1) {
+    let page = page?;
     page.verify_crc()?;
-    let plain = model.deobfuscate_with_store(page.bytes(), page.index(), &store);
-    let t = page.trailer();
-    println!("page {} type {:?}", page.index(), t.page_type());
+    let plain = model.deobfuscate(&store, page.index(), &opts)?;
+    println!("page {} type {:?}", page.index(), plain.as_page().trailer().page_type());
 }
 # Ok::<(), opensqlany::Error>(())
 ```
 
 ## Scope
 
-v0.1 covers the **page-store layer**: opening, iterating, CRC validation,
+This crate covers the **page-store layer**: opening, iterating, CRC validation,
 page-type classification, slotted-page directory parsing, and AP
 deobfuscation.
 

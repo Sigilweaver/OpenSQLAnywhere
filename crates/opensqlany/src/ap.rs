@@ -26,14 +26,10 @@
 //! `'M'` (0x4D). For these pages the stored bytes are virtually equal to the
 //! fill, so `bv` can be back-calculated directly.
 //!
-//! On the original corpus `bv` is constant per 16-page block, which is what
-//! [`ApModel::learn`] and [`ApModel::recover_bv_for_block`] assume. That does
+//! On the original corpus `bv` is constant per 16-page block, but that does
 //! not hold on every file - some QuickBooks Enterprise 24.0 files show
 //! several distinct `bv` values inside a single block (`opensqlany` issue
-//! #8). [`ApModel::deobfuscate_with_store`] resolves `bv` per page rather
-//! than per block, so it stays correct either way; the block-level API
-//! remains for callers that specifically want the cheaper block-level
-//! approximation.
+//! #8). [`ApModel::deobfuscate`] therefore resolves `bv` per page.
 //!
 //! # References
 //!
@@ -41,8 +37,11 @@
 
 use std::collections::HashMap;
 
-use crate::page::PAGE_SIZE;
+use crate::error::{Error, Result};
+use crate::options::ReadOptions;
+use crate::page::{PAGE_SIZE, Page};
 use crate::store::PageStore;
+use crate::warning::Warning;
 
 /// Size of a single AP sector in bytes.
 pub const SECTOR_SIZE: usize = 512;
@@ -126,15 +125,16 @@ fn sector_purity(sec: &[u8], base: u8, step: u8) -> f64 {
 
 /// Find the `step` that maximises the peak of the plaintext histogram.
 ///
-/// For each candidate step `s`, compute `plain[i] = (sec[i] − base − i*s) mod 256`
+/// For each candidate step `s`, compute `plain[i] = (sec[i] - base - i*s) mod 256`
 /// and find the frequency of the most common byte.  The step with the highest
-/// peak is returned.  For sectors with many zero-valued plaintext bytes this
-/// reliably finds the correct step.
+/// peak is returned; ties keep the lowest step.
 ///
-/// Returns `(best_step, peak_count)`.
-fn recover_step_peak(sec: &[u8], base: u8) -> (u8, usize) {
+/// Returns `(best_step, peak_count, runner_up_peak)`, where the runner-up is
+/// the best peak among all other steps.
+fn recover_step_peak(sec: &[u8], base: u8) -> (u8, usize, usize) {
     let mut best_step = 0u8;
     let mut best_count = 0usize;
+    let mut second_count = 0usize;
 
     for step in 0u8..=255 {
         let mut hist = [0u16; 256];
@@ -146,12 +146,15 @@ fn recover_step_peak(sec: &[u8], base: u8) -> (u8, usize) {
         }
         let peak = hist.iter().copied().max().unwrap_or(0) as usize;
         if peak > best_count {
+            second_count = best_count;
             best_count = peak;
             best_step = step;
+        } else if peak > second_count {
+            second_count = peak;
         }
     }
 
-    (best_step, best_count)
+    (best_step, best_count, second_count)
 }
 
 /// Deobfuscate `sec` given `(base, step)`: `plain[i] = (sec[i] − base − i*step) mod 256`.
@@ -250,18 +253,138 @@ fn learn_bv_for_page(bytes: &[u8], pn: u64, ptype: u8) -> Option<u8> {
 // Public AP model
 // ---------------------------------------------------------------------------
 
+/// How a page's `bv` was chosen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum BvSource {
+    /// The page is a pure-AP page and its own sectors gave `bv`.
+    PureSectors,
+    /// `bv` was recovered by scoring every candidate against the page.
+    Histogram,
+    /// The caller supplied `bv`.
+    Supplied,
+}
+
+/// How well one 512-byte sector's step fit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SectorFit {
+    step: u8,
+    peak: usize,
+    runner_up: usize,
+}
+
+impl SectorFit {
+    /// The step used to decode the sector.
+    pub fn step(&self) -> u8 {
+        self.step
+    }
+
+    /// Histogram peak (count of the most common plaintext byte) under the
+    /// chosen step.
+    pub fn peak(&self) -> usize {
+        self.peak
+    }
+
+    /// Best peak among all other steps. A runner-up close to [`peak`]
+    /// means the step is not well determined.
+    ///
+    /// [`peak`]: SectorFit::peak
+    pub fn runner_up(&self) -> usize {
+        self.runner_up
+    }
+}
+
+/// A deobfuscated page and how the keystream was determined.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct DeobfuscatedPage {
+    index: u64,
+    bytes: Vec<u8>,
+    bv: u8,
+    bv_source: BvSource,
+    sectors: [SectorFit; SECTORS_PER_PAGE],
+    warnings: Vec<Warning>,
+}
+
+impl DeobfuscatedPage {
+    /// Zero-based page number within the store.
+    pub fn index(&self) -> u64 {
+        self.index
+    }
+
+    /// The plaintext, [`PAGE_SIZE`] bytes. The trailer and CRC footer are
+    /// copied verbatim from the stored page.
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// Consume the result and return the plaintext.
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.bytes
+    }
+
+    /// The plaintext as a [`Page`], for the slotted-page parser.
+    pub fn as_page(&self) -> Page<'_> {
+        Page {
+            index: self.index,
+            bytes: &self.bytes,
+        }
+    }
+
+    /// The calibration byte used for this page.
+    pub fn bv(&self) -> u8 {
+        self.bv
+    }
+
+    /// How [`Self::bv`] was chosen.
+    pub fn bv_source(&self) -> BvSource {
+        self.bv_source
+    }
+
+    /// Per-sector step fits.
+    pub fn sectors(&self) -> &[SectorFit; SECTORS_PER_PAGE] {
+        &self.sectors
+    }
+
+    /// Conditions accepted under lenient [`ReadOptions`]. Empty means every
+    /// check passed.
+    pub fn warnings(&self) -> &[Warning] {
+        &self.warnings
+    }
+}
+
+/// What [`ApModel::learn`] found while calibrating.
+#[derive(Debug, Clone, Default)]
+#[non_exhaustive]
+pub struct LearnReport {
+    pure_pages: usize,
+    warnings: Vec<Warning>,
+}
+
+impl LearnReport {
+    /// Pure-AP pages that contributed calibration votes.
+    pub fn pure_pages(&self) -> usize {
+        self.pure_pages
+    }
+
+    /// Conditions accepted under lenient [`ReadOptions`].
+    pub fn warnings(&self) -> &[Warning] {
+        &self.warnings
+    }
+}
+
 /// AP deobfuscation model for a single SA17 page-store file.
 ///
 /// Build one with [`ApModel::learn`], then call [`ApModel::deobfuscate`]
 /// to recover plaintext for any page.
 ///
 /// The model is cheap to clone; it stores at most one `u8` per 16-page block.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ApModel {
     /// Learned `bv` values, keyed by block index (`pn / 16`).
     bv_map: HashMap<u64, u8>,
-    /// Best single `bv` to use when a block has no pure-AP page (fallback).
-    bv0: u8,
+    report: LearnReport,
 }
 
 impl ApModel {
@@ -272,16 +395,18 @@ impl ApModel {
     /// From those sectors we can back-calculate `bv(block)` precisely.
     ///
     /// Pages of other types, whose plaintext is dense, contribute nothing
-    /// to the calibration.  At least one pure-AP page must exist in the
-    /// store (SA17 files always have some).
-    pub fn learn(store: &PageStore) -> Self {
+    /// to the calibration.
+    pub fn learn(store: &PageStore, _opts: &ReadOptions) -> Result<Self> {
         let mut votes: HashMap<u64, HashMap<u8, u32>> = HashMap::new();
+        let mut pure_pages = 0usize;
 
         for page in store.pages() {
-            let ptype = page.trailer().page_type_raw;
+            let page = page?;
+            let ptype = page.trailer().page_type_raw();
             if !PURE_AP_TYPES.contains(&ptype) {
                 continue;
             }
+            pure_pages += 1;
             let pn = page.index();
             let bi = pn / 16;
             let p16 = (pn % 16) as u8;
@@ -306,7 +431,7 @@ impl ApModel {
                     continue;
                 }
 
-                // Invert the base formula: bv = base − pn − si + 4*(p16/2)
+                // Invert the base formula: bv = base - pn - si + 4*(p16/2)
                 let bv = base
                     .wrapping_sub(pn as u8)
                     .wrapping_sub(si as u8)
@@ -323,37 +448,18 @@ impl ApModel {
             }
         }
 
-        // Fallback: the bv for block 0, or the lowest observed block.
-        let bv0 = bv_map
-            .get(&0)
-            .copied()
-            .unwrap_or_else(|| bv_map.values().copied().next().unwrap_or(0));
-
-        ApModel { bv_map, bv0 }
+        Ok(ApModel {
+            bv_map,
+            report: LearnReport {
+                pure_pages,
+                warnings: Vec::new(),
+            },
+        })
     }
 
-    /// Return the `bv` for block `bi`, falling back to `bv0` for unknown blocks.
-    ///
-    /// For files where every block has at least one pure-AP page, every block
-    /// will be in `bv_map`.  For the rare blocks that lack one, `bv0` is used
-    /// (an approximation that degrades gracefully).
-    #[inline]
-    pub fn bv_at(&self, bi: u64) -> u8 {
-        self.bv_map.get(&bi).copied().unwrap_or(self.bv0)
-    }
-
-    /// Deobfuscate a full 4 KiB page.
-    ///
-    /// `pn` is the zero-based page index within the store.
-    ///
-    /// The page trailer (`0xFF0..0xFFC`) and CRC footer (`0xFFC..0x1000`) are
-    /// copied verbatim; they are stored in plaintext and must not be modified.
-    ///
-    /// For blocks whose `bv` was not learned from a pure-AP page this falls
-    /// back to `bv0`.  Use [`ApModel::deobfuscate_with_store`] to get the
-    /// correct `bv` for every block.
-    pub fn deobfuscate(&self, raw: &[u8], pn: u64) -> Vec<u8> {
-        self.deobfuscate_with_bv(raw, pn, self.bv_at(pn / 16))
+    /// What calibration found.
+    pub fn report(&self) -> &LearnReport {
+        &self.report
     }
 
     /// Number of blocks for which `bv` was directly learned from a pure-AP page.
@@ -361,99 +467,68 @@ impl ApModel {
         self.bv_map.len()
     }
 
-    /// Brute-force recover `bv` for a block that has no pure-AP page.
-    ///
-    /// For each candidate `bv` (0..=255), score it by computing the peak of the
-    /// histogram of `(stored[i] - (pn + si - bias) - i*step) mod 256` for each
-    /// candidate step, then summing the best-step peak across all sectors of up
-    /// to 3 sample pages in the block.  The candidate with the highest total
-    /// score is returned.
-    ///
-    /// The algorithm matches `APModel._recover_bv_for_block` in the Python
-    /// reference implementation.  At ~2.7 M arithmetic ops per block it is fast
-    /// in release mode (< 2 ms on modern hardware).
-    ///
-    /// This assumes `bv` is constant across the sampled pages, which does not
-    /// hold on every file (see [`Self::recover_bv_for_page`]); prefer that
-    /// method, via [`Self::deobfuscate_with_store`], when per-page accuracy
-    /// matters.
-    pub fn recover_bv_for_block(&self, store: &PageStore, bi: u64) -> u8 {
-        let page_start = bi * 16;
-        let page_end = (page_start + 16).min(store.page_count());
-        if page_start >= store.page_count() {
-            return self.bv0;
-        }
-
-        let sample_end = page_end.min(page_start + 3);
-        let mut bv_score = [0i64; 256];
-
-        for pn in page_start..sample_end {
-            if let Ok(page) = store.page(pn) {
-                score_bv_candidates(page.bytes(), pn, &mut bv_score);
-            }
-        }
-
-        bv_score
-            .iter()
-            .enumerate()
-            .max_by_key(|&(_, &v)| v)
-            .map(|(i, _)| i as u8)
-            .unwrap_or(self.bv0)
-    }
-
-    /// Brute-force recover `bv` for a single page, independent of its block.
-    ///
-    /// Same scoring technique as [`Self::recover_bv_for_block`] (histogram-peak
-    /// search over candidate `(bv, step)` pairs), scoped to exactly this page
-    /// rather than sampled across its 16-page block.
-    ///
-    /// Use this when a block's pages don't share a single `bv` - observed on
-    /// some QuickBooks Enterprise 24.0 files, where `bv` varies per page
-    /// rather than per block (see `opensqlany` issue #8). This is what
-    /// [`Self::deobfuscate_with_store`] uses.
-    pub fn recover_bv_for_page(&self, store: &PageStore, pn: u64) -> u8 {
-        let mut bv_score = [0i64; 256];
-        match store.page(pn) {
-            Ok(page) => score_bv_candidates(page.bytes(), pn, &mut bv_score),
-            Err(_) => return self.bv0,
-        }
-
-        bv_score
-            .iter()
-            .enumerate()
-            .max_by_key(|&(_, &v)| v)
-            .map(|(i, _)| i as u8)
-            .unwrap_or(self.bv0)
-    }
-
-    /// Deobfuscate a full 4 KiB page, recovering `bv` for this specific page
-    /// rather than trusting a value shared across its 16-page block.
+    /// Deobfuscate page `pn` of `store`, recovering `bv` for this specific
+    /// page rather than trusting a value shared across its 16-page block.
     ///
     /// `bv` is not reliably constant per block on every file - some
     /// QuickBooks Enterprise 24.0 files show 6-8 distinct `bv` values inside
     /// a single block (`opensqlany` issue #8). So this always resolves `bv`
     /// per page: directly, if `pn` is itself a pure-AP page with a clean
-    /// signal, otherwise via [`Self::recover_bv_for_page`]'s brute-force
-    /// search. Use this variant whenever you have store access; it's the
-    /// only variant that's correct for dense data blocks (all-`E`-type)
-    /// on files with per-page `bv`.
-    pub fn deobfuscate_with_store(&self, raw: &[u8], pn: u64, store: &PageStore) -> Vec<u8> {
+    /// signal, otherwise by scoring every candidate `bv` against the page.
+    ///
+    /// The page trailer (`0xFF0..0xFFC`) and CRC footer (`0xFFC..0x1000`) are
+    /// copied verbatim; they are stored in plaintext.
+    pub fn deobfuscate(
+        &self,
+        store: &PageStore,
+        pn: u64,
+        opts: &ReadOptions,
+    ) -> Result<DeobfuscatedPage> {
+        let page = store.page(pn)?;
+        let raw = page.bytes();
         let ptype = raw[TRAILER_START + 2];
-        let bv = learn_bv_for_page(raw, pn, ptype)
-            .unwrap_or_else(|| self.recover_bv_for_page(store, pn));
-        self.deobfuscate_with_bv(raw, pn, bv)
+        let (bv, source) = match learn_bv_for_page(raw, pn, ptype) {
+            Some(bv) => (bv, BvSource::PureSectors),
+            None => (recover_bv_for_page(raw, pn), BvSource::Histogram),
+        };
+        Self::decode_with_bv(page, bv, source, opts)
     }
 
     /// Deobfuscate using an explicitly supplied `bv`.
     ///
-    /// The caller is responsible for supplying the correct block `bv`; the
-    /// model's internal `bv_map` is not consulted.
-    pub fn deobfuscate_with_bv(&self, raw: &[u8], pn: u64, bv: u8) -> Vec<u8> {
-        assert!(raw.len() >= PAGE_SIZE, "page buffer too small");
+    /// The caller is responsible for supplying the correct `bv`; the model's
+    /// calibration is not consulted.
+    pub fn deobfuscate_with_bv(
+        page: Page<'_>,
+        bv: u8,
+        opts: &ReadOptions,
+    ) -> Result<DeobfuscatedPage> {
+        Self::decode_with_bv(page, bv, BvSource::Supplied, opts)
+    }
+
+    fn decode_with_bv(
+        page: Page<'_>,
+        bv: u8,
+        source: BvSource,
+        _opts: &ReadOptions,
+    ) -> Result<DeobfuscatedPage> {
+        let pn = page.index();
+        let raw = page.bytes();
+        if raw.len() != PAGE_SIZE {
+            return Err(Error::WrongBufferLength {
+                expected: PAGE_SIZE,
+                got: raw.len(),
+            });
+        }
 
         let mut out = vec![0u8; PAGE_SIZE];
+        let mut sectors = [SectorFit {
+            step: 0,
+            peak: 0,
+            runner_up: 0,
+        }; SECTORS_PER_PAGE];
 
-        for si in 0..SECTORS_PER_PAGE {
+        for (si, fit) in sectors.iter_mut().enumerate() {
             let off = si * SECTOR_SIZE;
             let data_end = if si + 1 == SECTORS_PER_PAGE {
                 TRAILER_START
@@ -462,13 +537,40 @@ impl ApModel {
             };
             let sec = &raw[off..data_end];
             let base = ap_base(pn, si, bv);
-            let (step, _) = recover_step_peak(sec, base);
+            let (step, peak, runner_up) = recover_step_peak(sec, base);
             apply_stream(sec, base, step, &mut out[off..data_end]);
+            *fit = SectorFit {
+                step,
+                peak,
+                runner_up,
+            };
         }
 
         out[TRAILER_START..PAGE_SIZE].copy_from_slice(&raw[TRAILER_START..PAGE_SIZE]);
-        out
+        Ok(DeobfuscatedPage {
+            index: pn,
+            bytes: out,
+            bv,
+            bv_source: source,
+            sectors,
+            warnings: Vec::new(),
+        })
     }
+}
+
+/// Brute-force recover `bv` for a single page, independent of its block.
+///
+/// Histogram-peak search over candidate `(bv, step)` pairs, scoped to exactly
+/// this page.
+fn recover_bv_for_page(raw: &[u8], pn: u64) -> u8 {
+    let mut bv_score = [0i64; 256];
+    score_bv_candidates(raw, pn, &mut bv_score);
+    bv_score
+        .iter()
+        .enumerate()
+        .max_by_key(|&(_, &v)| v)
+        .map(|(i, _)| i as u8)
+        .unwrap_or(0)
 }
 
 // ---------------------------------------------------------------------------
@@ -518,7 +620,7 @@ mod tests {
         let stored: Vec<u8> = (0..SECTOR_SIZE)
             .map(|i| base.wrapping_add((i as u8).wrapping_mul(step)))
             .collect();
-        let (recovered_step, _) = recover_step_peak(&stored, base);
+        let (recovered_step, _, _) = recover_step_peak(&stored, base);
         let mut plain = vec![0u8; SECTOR_SIZE];
         apply_stream(&stored, base, recovered_step, &mut plain);
         assert!(plain.iter().all(|&b| b == 0));
@@ -565,7 +667,7 @@ mod tests {
     }
 
     #[test]
-    fn deobfuscate_with_store_uses_per_page_bv_not_block_bv() {
+    fn deobfuscate_uses_per_page_bv_not_block_bv() {
         // Block 0: page 0 is a pure-AP calibration page with bv=10; page 1
         // is a dense 'E' page whose true bv is 200, different from the
         // block's learned value. Reproduces the per-page bv variation
@@ -580,17 +682,14 @@ mod tests {
         bytes.extend_from_slice(&page1);
         let store = PageStore::from_bytes(bytes).unwrap();
 
-        let model = ApModel::learn(&store);
-        assert_eq!(
-            model.bv_at(0),
-            10,
-            "block bv should learn from the pure-AP page"
-        );
+        let opts = ReadOptions::default();
+        let model = ApModel::learn(&store, &opts).unwrap();
+        assert_eq!(model.learned_block_count(), 1);
 
-        let page1_raw = store.page(1).unwrap().bytes();
-        let plain = model.deobfuscate_with_store(page1_raw, 1, &store);
+        let plain = model.deobfuscate(&store, 1, &opts).unwrap();
+        assert_eq!(plain.bv(), 200);
         assert!(
-            plain[..TRAILER_START].iter().all(|&b| b == 0),
+            plain.bytes()[..TRAILER_START].iter().all(|&b| b == 0),
             "per-page recovery should find page 1's true bv (200), not the block's (10)"
         );
     }
@@ -601,11 +700,8 @@ mod tests {
         // directly (learn_bv_for_page) or brute-forced (recover_bv_for_page).
         let zero_plain = vec![0u8; TRAILER_START];
         let page = encode_page(0, b'H', 77, 13, &zero_plain);
-        let store = PageStore::from_bytes(page.clone()).unwrap();
 
         assert_eq!(learn_bv_for_page(&page, 0, b'H'), Some(77));
-
-        let model = ApModel::default();
-        assert_eq!(model.recover_bv_for_page(&store, 0), 77);
+        assert_eq!(recover_bv_for_page(&page, 0), 77);
     }
 }

@@ -1,3 +1,4 @@
+use crate::error::{Error, Result};
 use crate::page::PAGE_SIZE;
 
 /// Magic value at superblock offset 0x14. Appears as bytes `5E BA 7A DA`
@@ -20,64 +21,143 @@ pub const SA_COPYRIGHT_MARKER: &[u8] = b"SAP SE, Copyright (c)2015 17.0.4.";
 /// [`Superblock::flags_06_variant_bits`].
 pub const FLAGS_06_BASE: u8 = 0x09;
 
+/// The `(format_major, version_a, version_b)` triple at superblock offsets
+/// `0x10`, `0x18` and `0x1A`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct FormatVersion {
+    /// `format_major` at offset 0x10.
+    pub major: u32,
+    /// `version_a` at offset 0x18.
+    pub a: u16,
+    /// `version_b` at offset 0x1A.
+    pub b: u16,
+}
+
+impl FormatVersion {
+    /// The triple observed on every SA17 build 2182 file in the corpus.
+    pub const SA17: FormatVersion = FormatVersion {
+        major: 3,
+        a: 201,
+        b: 12,
+    };
+}
+
+impl std::fmt::Display for FormatVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}.{}", self.major, self.a, self.b)
+    }
+}
+
 /// Parsed view of the page-0 superblock.
 ///
 /// Only fields that are invariant across the 112-file corpus are named;
-/// other fields are held as raw bytes. See `SPECIFICATION.md §3`.
+/// other fields are held as raw bytes. See `SPECIFICATION.md` section 3.
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub struct Superblock {
+    flags_06: u8,
+    current_lsn: u32,
+    format_major: u32,
+    magic: u32,
+    version_a: u16,
+    version_b: u16,
+    page_count_hint: u32,
+    sa_marker_present: bool,
+}
+
+impl Superblock {
+    /// Parse the superblock from the first page of a store.
+    ///
+    /// `page0` must be exactly [`PAGE_SIZE`] bytes long, otherwise
+    /// [`Error::WrongBufferLength`].
+    pub fn parse(page0: &[u8]) -> Result<Self> {
+        if page0.len() != PAGE_SIZE {
+            return Err(Error::WrongBufferLength {
+                expected: PAGE_SIZE,
+                got: page0.len(),
+            });
+        }
+
+        let u32_at =
+            |o: usize| u32::from_le_bytes([page0[o], page0[o + 1], page0[o + 2], page0[o + 3]]);
+        let u16_at = |o: usize| u16::from_le_bytes([page0[o], page0[o + 1]]);
+
+        Ok(Superblock {
+            flags_06: page0[0x06],
+            current_lsn: u32_at(0x08),
+            format_major: u32_at(0x10),
+            magic: u32_at(0x14),
+            version_a: u16_at(0x18),
+            version_b: u16_at(0x1A),
+            page_count_hint: u32_at(0x1C),
+            sa_marker_present: memmem(page0, SA_COPYRIGHT_MARKER).is_some(),
+        })
+    }
+
     /// Flag byte at offset 0x06. See [`FLAGS_06_BASE`] and
     /// [`Superblock::flags_06_variant_bits`] for how to interpret it.
-    pub flags_06: u8,
+    #[inline]
+    pub fn flags_06(&self) -> u8 {
+        self.flags_06
+    }
+
     /// u32_LE at offset 0x08 - the file's current log sequence number.
     ///
     /// Previously read as the low half of a per-file identifier. It is a
     /// write counter: across every file measured, the highest per-page
     /// [`PageTrailer::lsn`](crate::PageTrailer::lsn) is exactly this value
     /// minus ten, and offset `0x0C` - which a 64-bit identifier would need
-    /// - is always zero. See `SPECIFICATION.md §3.1a`.
-    pub current_lsn: u32,
-    /// u32_LE at offset 0x10. Always `3` in the corpus.
-    pub format_major: u32,
-    /// u32_LE at offset 0x14.
-    pub magic: u32,
-    /// u16_LE at offset 0x18. Always `201` in the corpus.
-    pub version_a: u16,
-    /// u16_LE at offset 0x1A. Always `12` in the corpus.
-    pub version_b: u16,
-    /// u32_LE at offset 0x1C. Typically `total_pages - 128`.
-    pub page_count_hint: u32,
-    /// `true` iff [`SA_COPYRIGHT_MARKER`] is present anywhere in page 0.
-    pub sa_marker_present: bool,
-}
+    /// - is always zero. See `SPECIFICATION.md` section 3.1a.
+    #[inline]
+    pub fn current_lsn(&self) -> u32 {
+        self.current_lsn
+    }
 
-impl Superblock {
-    /// Parse the superblock from the first page of a store.
-    ///
-    /// `page0` must be exactly [`PAGE_SIZE`] bytes long.
-    pub fn parse(page0: &[u8]) -> Self {
-        assert_eq!(page0.len(), PAGE_SIZE, "page 0 must be exactly 4096 bytes");
-
-        let flags_06 = page0[0x06];
-        let current_lsn = u32::from_le_bytes(page0[0x08..0x0C].try_into().unwrap());
-        let format_major = u32::from_le_bytes(page0[0x10..0x14].try_into().unwrap());
-        let magic = u32::from_le_bytes(page0[0x14..0x18].try_into().unwrap());
-        let version_a = u16::from_le_bytes(page0[0x18..0x1A].try_into().unwrap());
-        let version_b = u16::from_le_bytes(page0[0x1A..0x1C].try_into().unwrap());
-        let page_count_hint = u32::from_le_bytes(page0[0x1C..0x20].try_into().unwrap());
-
-        let sa_marker_present = memmem(page0, SA_COPYRIGHT_MARKER).is_some();
-
-        Superblock {
-            flags_06,
-            current_lsn,
-            format_major,
-            magic,
-            version_a,
-            version_b,
-            page_count_hint,
-            sa_marker_present,
+    /// The `(format_major, version_a, version_b)` triple.
+    #[inline]
+    pub fn format(&self) -> FormatVersion {
+        FormatVersion {
+            major: self.format_major,
+            a: self.version_a,
+            b: self.version_b,
         }
+    }
+
+    /// u32_LE at offset 0x10. Always `3` in the corpus.
+    #[inline]
+    pub fn format_major(&self) -> u32 {
+        self.format_major
+    }
+
+    /// u32_LE at offset 0x14.
+    #[inline]
+    pub fn magic(&self) -> u32 {
+        self.magic
+    }
+
+    /// u16_LE at offset 0x18. Always `201` in the corpus.
+    #[inline]
+    pub fn version_a(&self) -> u16 {
+        self.version_a
+    }
+
+    /// u16_LE at offset 0x1A. Always `12` in the corpus.
+    #[inline]
+    pub fn version_b(&self) -> u16 {
+        self.version_b
+    }
+
+    /// u32_LE at offset 0x1C. Typically `total_pages - 128`.
+    #[inline]
+    pub fn page_count_hint(&self) -> u32 {
+        self.page_count_hint
+    }
+
+    /// `true` iff [`SA_COPYRIGHT_MARKER`] is present anywhere in page 0.
+    #[inline]
+    pub fn sa_marker_present(&self) -> bool {
+        self.sa_marker_present
     }
 
     /// `true` iff the 32-bit magic at offset 0x14 equals [`SA_MAGIC`].
@@ -93,7 +173,7 @@ impl Superblock {
     /// and bit 6 (`0x40`) are the two observed so far. Bit 5 was seen to
     /// co-occur with a lowercase page-type-byte variant on one file, but
     /// that correlation isn't confirmed as causal. See `SPECIFICATION.md`
-    /// §6 and [`PageType::from_byte`](crate::PageType::from_byte).
+    /// section 6 and [`PageType::from_byte`](crate::PageType::from_byte).
     #[inline]
     pub fn flags_06_variant_bits(&self) -> u8 {
         self.flags_06 & !FLAGS_06_BASE
@@ -135,5 +215,13 @@ mod tests {
         assert_eq!(sb_with_flags(0x49).flags_06_variant_bits(), 0x40);
         // 0x29 = base | bit 5 (QuickBooks Enterprise 24.0, openqbw#16).
         assert_eq!(sb_with_flags(0x29).flags_06_variant_bits(), 0x20);
+    }
+
+    #[test]
+    fn parse_rejects_wrong_length() {
+        assert!(matches!(
+            Superblock::parse(&[0u8; 100]),
+            Err(Error::WrongBufferLength { .. })
+        ));
     }
 }

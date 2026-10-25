@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use opensqlany::{ApModel, PageStore, PageType, SlottedPage};
+use opensqlany::{ApModel, PageStore, PageType, ReadOptions, SlottedPage};
 
 #[derive(Parser)]
 #[command(
@@ -81,25 +81,29 @@ fn inspect(path: &std::path::Path, verify_crc: bool) -> Result<()> {
     );
     println!(
         "superblock magic  : 0x{:08X}  {}",
-        sb.magic,
+        sb.magic(),
         if sb.magic_ok() { "OK" } else { "MISMATCH" },
     );
     println!(
         "format triple     : {}.{}.{}",
-        sb.format_major, sb.version_a, sb.version_b
+        sb.format_major(),
+        sb.version_a(),
+        sb.version_b()
     );
     println!(
         "flags_06 / cur LSN: 0x{:02X} / {} (0x{:08X})",
-        sb.flags_06, sb.current_lsn, sb.current_lsn
+        sb.flags_06(),
+        sb.current_lsn(),
+        sb.current_lsn()
     );
     println!(
         "page_count_hint   : {} (total - hint = {})",
-        sb.page_count_hint,
-        total as i64 - sb.page_count_hint as i64
+        sb.page_count_hint(),
+        total as i64 - sb.page_count_hint() as i64
     );
     println!(
         "SAP SA 17.0.4.2182: {}",
-        if sb.sa_marker_present {
+        if sb.sa_marker_present() {
             "marker present"
         } else {
             "NOT present"
@@ -111,8 +115,9 @@ fn inspect(path: &std::path::Path, verify_crc: bool) -> Result<()> {
     let mut trailer_failures: Vec<u64> = Vec::new();
 
     for page in store.pages().skip(1) {
+        let page = page?;
         let t = page.trailer();
-        *histogram.entry(t.page_type_raw).or_insert(0) += 1;
+        *histogram.entry(t.page_type_raw()).or_insert(0) += 1;
         if page.verify_trailer().is_err() {
             trailer_failures.push(page.index());
         }
@@ -165,11 +170,11 @@ fn dump_page(path: &std::path::Path, pn: u64) -> Result<()> {
     println!(
         "page {pn}  type {:?}  (0x{:02X})  flags_ff0/1 = {:02X}/{:02X}  lsn = {} (0x{:08X})",
         t.page_type(),
-        t.page_type_raw,
-        t.flag_ff0,
-        t.flag_ff1,
-        t.lsn,
-        t.lsn,
+        t.page_type_raw(),
+        t.raw()[0],
+        t.raw()[1],
+        t.lsn(),
+        t.lsn(),
     );
     println!(
         "crc stored = 0x{:08X}  computed = 0x{:08X}  {}",
@@ -190,31 +195,30 @@ fn dump_page(path: &std::path::Path, pn: u64) -> Result<()> {
 fn slots(path: &std::path::Path, pn: u64) -> Result<()> {
     let store = PageStore::open(path)?;
     let page = store.page(pn)?;
-    let slotted = SlottedPage::parse(page);
+    let slotted = SlottedPage::parse(page, &ReadOptions::default())?;
     let t = page.trailer();
 
     println!("page {pn}  type {:?}", t.page_type());
-    match &slotted.directory {
+    match slotted.directory() {
         None => {
             println!("no plausible slot directory found");
             println!("(note: QBW-obfuscated files must be deobfuscated first)");
         }
         Some(dir) => {
             println!(
-                "directory: scan=0x{:03X}  array=0x{:03X}..0x{:03X}  slots={} live={} deleted={} leading_zero={}",
-                dir.scan_start,
-                dir.array_start,
-                dir.end,
-                dir.slots.len(),
+                "directory: array=0x{:03X}..0x{:03X}  slots={} live={} deleted={}",
+                dir.array_start(),
+                dir.end(),
+                dir.slots().len(),
                 dir.live_count(),
                 dir.deleted_count(),
-                dir.leading_zero,
             );
             if let Some(min) = dir.min_offset() {
                 println!("min row offset: 0x{:04X}", min);
             }
             println!();
-            for (i, (off, bytes)) in slotted.row_bytes().iter().enumerate().take(16) {
+            for (i, row) in slotted.rows().iter().enumerate().take(16) {
+                let (off, bytes) = (row.offset(), row.bytes());
                 let preview = bytes.iter().take(32).copied().collect::<Vec<_>>();
                 let hex = preview
                     .iter()
@@ -245,15 +249,15 @@ fn ap_info(path: &std::path::Path) -> Result<()> {
     let store = PageStore::open(path).with_context(|| format!("opening {path:?}"))?;
     print!("Learning AP model from {}... ", path.display());
     std::io::Write::flush(&mut std::io::stdout()).ok();
-    let model = ApModel::learn(&store);
+    let model = ApModel::learn(&store, &ReadOptions::default())?;
     println!("done.");
+    println!("  pure-AP pages  : {}", model.report().pure_pages());
     println!("  learned blocks : {}", model.learned_block_count());
     println!("  total blocks   : {}", store.page_count().div_ceil(16));
     println!(
         "  coverage       : {:.1}%",
         100.0 * model.learned_block_count() as f64 / store.page_count().div_ceil(16).max(1) as f64
     );
-    println!("  bv(block 0)    : 0x{:02X}", model.bv_at(0));
     Ok(())
 }
 
@@ -265,21 +269,25 @@ fn deob(path: &std::path::Path, pn: u64, raw: bool) -> Result<()> {
     if raw {
         println!(
             "page {pn} (raw)  type 0x{:02X}  flags {:02X}/{:02X}",
-            t.page_type_raw, t.flag_ff0, t.flag_ff1,
+            t.page_type_raw(),
+            t.raw()[0],
+            t.raw()[1],
         );
         hexdump(page.bytes(), 0);
         return Ok(());
     }
 
-    let model = ApModel::learn(&store);
-    let plain = model.deobfuscate_with_store(page.bytes(), pn, &store);
+    let opts = ReadOptions::default();
+    let model = ApModel::learn(&store, &opts)?;
+    let dec = model.deobfuscate(&store, pn, &opts)?;
+    let plain = dec.bytes();
     let pt = PageType::from_byte(plain[0xFF2]);
 
     println!(
         "page {pn} (deobfuscated)  type {:?} (0x{:02X})  flags {:02X}/{:02X}",
         pt, plain[0xFF2], plain[0xFF0], plain[0xFF1],
     );
-    hexdump(&plain, 0);
+    hexdump(plain, 0);
     Ok(())
 }
 
