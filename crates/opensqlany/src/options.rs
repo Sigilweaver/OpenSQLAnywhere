@@ -29,7 +29,12 @@ impl Leniency {
     pub const FORMAT: Leniency = Leniency { bits: 1 << 3 };
 
     /// Every relaxation this release knows.
-    pub const fn all() -> Leniency {
+    ///
+    /// **This set widens**: a later minor release that adds a flag adds it
+    /// here, so a caller that stores or depends on this value accepts more
+    /// kinds of problem after upgrading. Name the flags instead (`KEYSTREAM |
+    /// DIRECTORY`) unless that is what you want.
+    pub const fn every_known() -> Leniency {
         Leniency { bits: 0b1111 }
     }
 
@@ -83,10 +88,24 @@ impl ReadOptions {
         ReadOptions::default()
     }
 
-    /// Options that relax every check this release knows. Each accepted
-    /// problem is reported as a [`Warning`](crate::Warning) on the result.
+    /// Options that relax exactly [`Leniency::KEYSTREAM`],
+    /// [`Leniency::DIRECTORY`], [`Leniency::INTEGRITY`] and
+    /// [`Leniency::FORMAT`]. A flag added in a later release is *not* added
+    /// to this set, so upgrading never accepts a new kind of problem. Each
+    /// accepted problem is reported as a [`Warning`](crate::Warning) on the
+    /// result.
     pub fn lenient() -> Self {
-        ReadOptions::default().with_leniency(Leniency::all())
+        ReadOptions::default().with_leniency(
+            Leniency::KEYSTREAM | Leniency::DIRECTORY | Leniency::INTEGRITY | Leniency::FORMAT,
+        )
+    }
+
+    /// Options that relax every check this release knows.
+    ///
+    /// **This set widens** with each flag a later release adds; see
+    /// [`Leniency::every_known`].
+    pub fn widest() -> Self {
+        ReadOptions::default().with_leniency(Leniency::every_known())
     }
 
     /// These options with `leniency` in place of the current set.
