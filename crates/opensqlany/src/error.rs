@@ -45,6 +45,7 @@ pub enum Error {
 
     /// File size is not a multiple of the page size.
     #[error("file size {size} is not a multiple of page size {page_size}")]
+    #[non_exhaustive]
     NotPageAligned {
         /// File size in bytes.
         size: u64,
@@ -54,6 +55,7 @@ pub enum Error {
 
     /// File is smaller than one page (no superblock).
     #[error("file too small for a page store ({size} bytes)")]
+    #[non_exhaustive]
     TooSmall {
         /// File size in bytes.
         size: u64,
@@ -61,6 +63,7 @@ pub enum Error {
 
     /// Fewer bytes were read than the file size reported before reading.
     #[error("short read: expected {expected} bytes, read {got}")]
+    #[non_exhaustive]
     ShortRead {
         /// Size reported by the file system before the read.
         expected: u64,
@@ -71,6 +74,7 @@ pub enum Error {
     /// A buffer handed to the reader does not have the length of the
     /// structure being parsed.
     #[error("wrong buffer length: need {expected} bytes, got {got}")]
+    #[non_exhaustive]
     WrongBufferLength {
         /// Bytes required.
         expected: usize,
@@ -80,6 +84,7 @@ pub enum Error {
 
     /// Page index out of range for this store.
     #[error("page {page} out of range (store has {total} pages)")]
+    #[non_exhaustive]
     PageOutOfRange {
         /// Requested page number.
         page: u64,
@@ -89,6 +94,7 @@ pub enum Error {
 
     /// Superblock magic did not match the expected SA17 value.
     #[error("bad superblock magic: 0x{got:08X} (want 0x{want:08X})")]
+    #[non_exhaustive]
     BadMagic {
         /// Magic found at superblock offset 0x14.
         got: u32,
@@ -98,6 +104,7 @@ pub enum Error {
 
     /// The superblock names a format version this reader does not decode.
     #[error("unsupported format version {major}.{a}.{b}")]
+    #[non_exhaustive]
     UnsupportedVersion {
         /// `format_major` at superblock offset 0x10.
         major: u32,
@@ -109,6 +116,7 @@ pub enum Error {
 
     /// Per-page CRC-32 footer did not match the computed value.
     #[error("crc mismatch on page {page}: stored 0x{stored:08X}, computed 0x{computed:08X}")]
+    #[non_exhaustive]
     BadCrc {
         /// Zero-based page number.
         page: u64,
@@ -120,6 +128,7 @@ pub enum Error {
 
     /// One of the reserved-zero regions of the page trailer was non-zero.
     #[error("bad page trailer on page {page}: reserved bytes non-zero")]
+    #[non_exhaustive]
     BadTrailer {
         /// Zero-based page number.
         page: u64,
@@ -139,6 +148,7 @@ pub enum Error {
     #[error(
         "page {page} sector {sector}: keystream step is low confidence (peak {peak}, runner-up {runner_up})"
     )]
+    #[non_exhaustive]
     LowConfidenceKeystream {
         /// Zero-based page number.
         page: u64,
@@ -152,6 +162,7 @@ pub enum Error {
 
     /// Calibration evidence on one page points at more than one `bv`.
     #[error("page {page}: calibration is ambiguous between bv candidates {candidates:?}")]
+    #[non_exhaustive]
     AmbiguousCalibration {
         /// Zero-based page number.
         page: u64,
@@ -162,6 +173,7 @@ pub enum Error {
     /// The decoded page matched no structural check, so the guessed keystream
     /// is unverified.
     #[error("page {page}: keystream bv 0x{bv:02X} could not be verified")]
+    #[non_exhaustive]
     KeystreamUnverified {
         /// Zero-based page number.
         page: u64,
@@ -173,6 +185,7 @@ pub enum Error {
     #[error(
         "page {page}: slot offset 0x{offset:04X} lies inside the directory ending at 0x{directory_end:04X}"
     )]
+    #[non_exhaustive]
     SlotOffsetInDirectory {
         /// Zero-based page number.
         page: u64,
@@ -184,6 +197,7 @@ pub enum Error {
 
     /// More than one slot directory candidate fits the page.
     #[error("page {page}: more than one slot directory candidate fits")]
+    #[non_exhaustive]
     AmbiguousSlotDirectory {
         /// Zero-based page number.
         page: u64,
@@ -191,6 +205,7 @@ pub enum Error {
 
     /// The slot directory has fewer entries than the page prelude declares.
     #[error("page {page}: slot directory has {found} entries, prelude declares {expected}")]
+    #[non_exhaustive]
     SlotDirectoryTruncated {
         /// Zero-based page number.
         page: u64,
@@ -202,6 +217,7 @@ pub enum Error {
 
     /// The bytes before the slot directory could not be interpreted.
     #[error("page {page}: page prelude could not be interpreted")]
+    #[non_exhaustive]
     UnknownPrelude {
         /// Zero-based page number.
         page: u64,
@@ -209,6 +225,7 @@ pub enum Error {
 
     /// No slot directory was found on a page that was expected to have one.
     #[error("page {page}: no slot directory found ({reason})")]
+    #[non_exhaustive]
     NoSlotDirectory {
         /// Zero-based page number.
         page: u64,

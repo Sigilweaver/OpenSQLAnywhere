@@ -58,11 +58,13 @@ impl fmt::Display for Warning {
 pub enum WarningKind {
     /// The keystream was chosen by histogram score alone; no structural check
     /// confirmed it.
+    #[non_exhaustive]
     UnverifiedKeystream {
         /// The `bv` that was used.
         bv: u8,
     },
     /// A sector's step was chosen with a thin lead over its runner-up.
+    #[non_exhaustive]
     LowConfidenceSector {
         /// Histogram peak of the chosen step.
         peak: usize,
@@ -71,6 +73,7 @@ pub enum WarningKind {
     },
     /// Calibration evidence pointed at more than one `bv`; the strongest was
     /// used.
+    #[non_exhaustive]
     AmbiguousCalibration {
         /// The `bv` that was used.
         chosen: u8,
@@ -82,6 +85,7 @@ pub enum WarningKind {
     /// The page failed its reserved-byte trailer check.
     BadTrailer,
     /// The superblock names a format version this reader does not decode.
+    #[non_exhaustive]
     UnsupportedVersion {
         /// `format_major`.
         major: u32,

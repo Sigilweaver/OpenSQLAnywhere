@@ -161,7 +161,7 @@ fn non_zero_reserved_ff8_is_rejected() {
     page.verify_crc().expect("crc is still valid");
     assert!(matches!(
         page.verify_trailer().unwrap_err(),
-        opensqlany::Error::BadTrailer { page: 1 }
+        opensqlany::Error::BadTrailer { page: 1, .. }
     ));
     assert_eq!(page.trailer().raw()[8..12], [0x00, 0x01, 0x00, 0x00]);
 }
