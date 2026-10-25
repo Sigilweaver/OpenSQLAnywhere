@@ -62,8 +62,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `PageStore::open_with`, `from_bytes_with`, `open_unchecked`,
   `from_bytes_unchecked`, `page_verified`, `verified_pages` and
-  `consistency` (`Consistency`: page-count hint and LSN against the pages
-  present, reported rather than enforced).
+  `consistency` (`Consistency`: the page-count hint and the superblock LSN
+  against the pages present, as values with `page_count_hint()`,
+  `max_page_lsn()`, `current_lsn()` and `lsn_gap()`; reported rather than
+  enforced, because 29 of the 112 corpus files have an LSN gap of 14, not 10,
+  and 3 have a page count that differs from the hint).
 - `Page::is_unallocated()`.
 - `SlotDirectory::declared_count()` and `SlottedPage::warnings()`.
 - `DeobfuscatedPage::confidence()` (`Confidence`), `evidence()` (`Evidence`)

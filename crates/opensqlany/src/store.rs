@@ -22,9 +22,12 @@ pub struct PageStore {
 
 /// How the superblock's bookkeeping compares with the pages actually present.
 ///
-/// Both relations hold on every file in the 112-file corpus, but they are
-/// reported rather than enforced: the hint can differ on stores under 128
-/// pages or on other editions. See `SPECIFICATION.md` sections 2.2a and 3.2.
+/// Neither relation is a test for a damaged copy. On the 112-file corpus 80
+/// files satisfy both; 29 have a page-count match but a highest page LSN
+/// that is 14 (not 10) below the superblock LSN; 3 have a page count that
+/// differs from the hint by 242, 197 and 78. All 32 have clean CRCs.
+/// The values are reported so a caller can look at them; nothing enforces
+/// them. See `SPECIFICATION.md` sections 2.2a and 3.2.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Consistency {
@@ -35,9 +38,18 @@ pub struct Consistency {
 }
 
 impl Consistency {
-    /// `true` when `page_count_hint + 128` equals the number of pages, as it
-    /// does on every corpus file with at least 128 pages. A truncated copy
-    /// fails this.
+    /// Pages in the store.
+    pub fn page_count(&self) -> u64 {
+        self.page_count
+    }
+
+    /// The superblock's page-count hint.
+    pub fn page_count_hint(&self) -> u32 {
+        self.page_count_hint
+    }
+
+    /// `true` when `page_count_hint + 128` equals the number of pages (109 of
+    /// the 112 corpus files).
     pub fn page_count_matches(&self) -> bool {
         self.page_count == u64::from(self.page_count_hint) + 128
     }
@@ -47,15 +59,15 @@ impl Consistency {
         self.max_page_lsn
     }
 
-    /// `true` when the highest page LSN is the superblock LSN minus ten. A
-    /// page newer than that (a torn checkpoint) fails this.
-    pub fn lsn_matches(&self) -> bool {
-        self.max_page_lsn.wrapping_add(10) == self.current_lsn
+    /// The superblock's current LSN.
+    pub fn current_lsn(&self) -> u32 {
+        self.current_lsn
     }
 
-    /// `true` when both relations hold.
-    pub fn is_consistent(&self) -> bool {
-        self.page_count_matches() && self.lsn_matches()
+    /// Superblock LSN minus the highest page LSN: 10 on 83 corpus files and
+    /// 14 on 29. `None` when the page LSN is the larger.
+    pub fn lsn_gap(&self) -> Option<u32> {
+        self.current_lsn.checked_sub(self.max_page_lsn)
     }
 }
 
@@ -155,7 +167,9 @@ impl PageStore {
             }
             store
                 .warnings
-                .push(Warning::new(WarningKind::Other("unsupported-flags-06")));
+                .push(Warning::new(WarningKind::UnsupportedFlags {
+                    flags_06: sb.flags_06(),
+                }));
         }
         Ok(store)
     }
@@ -402,6 +416,19 @@ mod tests {
     }
 
     #[test]
+    fn a_page_lsn_gap_other_than_ten_is_reported_not_rejected() {
+        // Review S7: 29 of 112 healthy corpus files have a gap of 14.
+        let mut sb = superblock_page(12, 0x09, SA_MAGIC);
+        sb[0x08..0x0C].copy_from_slice(&114u32.to_le_bytes());
+        let mut page = vec![0u8; PAGE_SIZE];
+        page[0xFF4..0xFF8].copy_from_slice(&100u32.to_le_bytes());
+        let mut bytes = sb;
+        bytes.extend_from_slice(&page);
+        let store = PageStore::from_bytes(bytes).unwrap();
+        assert_eq!(store.consistency().unwrap().lsn_gap(), Some(14));
+    }
+
+    #[test]
     fn consistency_compares_hint_and_lsn_with_the_pages() {
         let mut sb = superblock_page(12, 0x09, SA_MAGIC);
         sb[0x08..0x0C].copy_from_slice(&110u32.to_le_bytes());
@@ -412,8 +439,10 @@ mod tests {
         bytes.extend_from_slice(&page);
         let store = PageStore::from_bytes_unchecked(bytes).unwrap();
         let c = store.consistency().unwrap();
-        assert!(c.lsn_matches());
+        assert_eq!(c.lsn_gap(), Some(10));
         assert_eq!(c.max_page_lsn(), 100);
+        assert_eq!(c.current_lsn(), 110);
+        assert_eq!(c.page_count(), 2);
         assert!(
             !c.page_count_matches(),
             "the hint implies 2 - 128 + 128 pages"
