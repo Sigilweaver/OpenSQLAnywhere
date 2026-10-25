@@ -307,6 +307,27 @@ footers (§2.1) are validated; their bodies are opaque to this spec.
   2,186, 95 % upper bound about 0.14 %) is a bound for pages like the checked
   ones, not for all pages.
 
+- Slot directories that are not one descending run (open; the decoder reports
+  them as truncated and does not read them). The prelude count is right on
+  these pages; the array is made of more than one descending run. Two shapes
+  have been seen:
+  1. *Run continues at the start of the page.* Page 284 of the smallest
+     corpus file: 89 entries at `0x14E` (values `0xFC8` down to `0x8A4`),
+     then 77 entries at `0x000` (`0x890` down to `0x218`). 89 + 77 = 166, the
+     declared count, and the two runs are continuous in value. The first run
+     ends at `0x200`, a sector boundary, so a mis-decoded sector 1 is also a
+     candidate explanation on other pages.
+  2. *Value wrap mid-array.* Page 292: one run ends at `0x329` and the same
+     array continues from `0xFA9`, i.e. the values jump back up to the top of
+     the page and descend again.
+  Only about 22 % of the truncated pages read as `count` in-range entries
+  from a single start, and where a continuation exists it is often not
+  unique (candidate starts `1, 3, 5, ...` are all suffixes of one run), so
+  no rule that is safe to accept has been found. Declared counts below 4
+  cannot be confirmed from the prelude at all (the pair `(1, 0)` or `(2, 0)`
+  is among the commonest words in page data), so strict mode cannot read pages
+  with 1 to 3 rows; they need `Leniency::DIRECTORY`.
+
 ## 7. References
 
 - SAP SQL Anywhere 17.0.01 product documentation:
