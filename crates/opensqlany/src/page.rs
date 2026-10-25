@@ -36,6 +36,13 @@ impl<'a> Page<'a> {
         Ok(Page { index, bytes })
     }
 
+    /// `true` when every byte of the page is zero, the state of a page that
+    /// was never written. Its stored CRC is zero too, so [`Page::verify_crc`]
+    /// fails on it; treat it as a distinct state rather than as corruption.
+    pub fn is_unallocated(&self) -> bool {
+        self.bytes.iter().all(|&b| b == 0)
+    }
+
     /// Zero-based page number within the store.
     #[inline]
     pub fn index(&self) -> u64 {

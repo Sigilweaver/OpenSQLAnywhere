@@ -31,17 +31,24 @@
 //!
 //! 1. **Trailer row count.** The row count in a slotted page's prelude must
 //!    equal the plaintext trailer's count byte ([`Evidence::TrailerRowCount`]).
+//!    It is used for counts of four or more, because the pair `(1, 0)` and
+//!    `(2, 0)` is the commonest word in the data. It is not used when exact
+//!    sectors or a block anchor point at a different `bv`; that page is
+//!    [`Error::AmbiguousCalibration`].
 //! 2. **Exact sectors.** At least two sectors of the page are exact AP
 //!    progressions and agree on `bv`, and no exact sector disagrees
-//!    ([`Evidence::ExactSectors`]).
-//! 3. **Block anchor.** The page's best histogram `bv` equals the `bv` of a
-//!    calibrated pure-AP page in the same 16-page block
-//!    ([`Evidence::BlockAnchor`]).
+//!    ([`Evidence::ExactSectors`]). This assumes the constant plaintext is
+//!    zero, which is why it is [`Confidence::Calibrated`], not `Verified`.
+//!
+//! A calibrated page elsewhere in the block with the same `bv`
+//! ([`Evidence::BlockAnchor`]) is reported but is not confirmation: a block
+//! often holds more than one `bv`.
 //!
 //! A page with none of these is [`Confidence::Unverified`] and is an error
 //! unless the caller sets [`Leniency::KEYSTREAM`](crate::Leniency::KEYSTREAM).
-//! Competing evidence is also an error, never a coin flip: ties resolve to
-//! [`Error::AmbiguousCalibration`].
+//! Competing evidence is also an error, never a coin flip: it resolves to
+//! [`Error::AmbiguousCalibration`]. An all-zero page was never written and is
+//! returned as it is ([`DeobfuscatedPage::unallocated`]).
 //!
 //! Every choice is deterministic. Ties between equal scores resolve to the
 //! lowest value, and no hash-ordered container decides an outcome.
@@ -234,15 +241,16 @@ fn plaintext(scan: &PageScan, raw: &[u8], bv: u8) -> Vec<u8> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum BvSource {
-    /// A structural check or an agreeing pure-AP page confirmed a candidate
-    /// (see [`DeobfuscatedPage::evidence`]).
-    Verified,
+    /// The row count in the decoded prelude matched the trailer.
+    TrailerRowCount,
     /// Two or more exact AP sectors of the page agree.
     ExactSectors,
     /// The highest-scoring histogram candidate, with nothing confirming it.
     Histogram,
     /// The caller supplied `bv`.
     Supplied,
+    /// The page was never written; no key applies.
+    Unallocated,
 }
 
 /// How far a page's `bv` can be trusted.
@@ -251,16 +259,19 @@ pub enum BvSource {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[non_exhaustive]
 pub enum Confidence {
-    /// Nothing independent confirmed the guess. Only returned under
+    /// Nothing independent confirmed the guess; [`Evidence::BlockAnchor`] and
+    /// [`Evidence::ZeroMass`] do not count as confirmation. Only returned
+    /// under
     /// [`Leniency::KEYSTREAM`](crate::Leniency::KEYSTREAM), with a
     /// [`WarningKind::UnverifiedKeystream`] warning.
     Unverified,
-    /// The guess rests on evidence from the page's own sectors or from the
-    /// calibration of other pages ([`Evidence::ExactSectors`],
-    /// [`Evidence::BlockAnchor`]).
+    /// The guess rests on the page's own sectors: two or more exact AP
+    /// sectors agree ([`Evidence::ExactSectors`]), under the assumption that
+    /// their plaintext is zero.
     Calibrated,
     /// The decoded page matched a structural check against plaintext that is
-    /// not obfuscated ([`Evidence::TrailerRowCount`]).
+    /// not obfuscated ([`Evidence::TrailerRowCount`]), or it was never
+    /// written and needs no key ([`Evidence::Unallocated`]).
     Verified,
 }
 
@@ -274,16 +285,22 @@ pub enum Evidence {
     TrailerRowCount,
     /// Sectors that are exact AP progressions (all plaintext equal, taken to
     /// be zero) agree on `bv`.
+    #[non_exhaustive]
     ExactSectors {
         /// Exact sectors voting for the chosen `bv`.
         count: usize,
         /// Exact sectors voting for another `bv`.
         dissent: usize,
     },
-    /// A calibrated pure-AP page in the same 16-page block has the same `bv`.
+    /// A calibrated page in the same 16-page block has the same `bv`. This is
+    /// a hint, not confirmation: about a third of blocks hold more than one
+    /// `bv`.
     BlockAnchor,
+    /// The page was never written (every byte is zero), so it needs no key.
+    Unallocated,
     /// Histogram score: bytes that decode to zero under the chosen `bv`, and
     /// how many more than the best competing candidate.
+    #[non_exhaustive]
     ZeroMass {
         /// Data bytes that decode to zero.
         zeros: usize,
@@ -374,7 +391,13 @@ impl DeobfuscatedPage {
         }
     }
 
-    /// The calibration byte used for this page.
+    /// `true` when the page was never written (every byte is zero). Its
+    /// bytes are returned as they are and no key was guessed.
+    pub fn unallocated(&self) -> bool {
+        self.bv_source == BvSource::Unallocated
+    }
+
+    /// The calibration byte used for this page (0 for an unallocated page).
     pub fn bv(&self) -> u8 {
         self.bv
     }
@@ -457,7 +480,7 @@ pub struct ApModel {
     /// Calibrated pure-AP pages: block index -> `(page, bv)`.
     anchors: BTreeMap<u64, Vec<(u64, u8)>>,
     /// Identifies the store the model was learned from.
-    fingerprint: (u64, u32),
+    fingerprint: (u64, u32, u32),
     /// Per-block calibrated pages from every page type, filled on demand.
     /// Shared between clones.
     blocks: BlockCache,
@@ -467,10 +490,36 @@ pub struct ApModel {
 /// Calibrated pages per block: `(page, bv)`.
 type BlockCache = Arc<Mutex<BTreeMap<u64, Arc<Vec<(u64, u8)>>>>>;
 
-/// Cheap identity of a store: its page count and the CRC of page 0.
-fn fingerprint(store: &PageStore) -> Result<(u64, u32)> {
-    let page0 = store.page(0)?;
-    Ok((store.page_count(), crc32fast::hash(page0.bytes())))
+/// Cheap identity of a store: its page count and the CRCs of its first and
+/// last pages.
+fn fingerprint(store: &PageStore) -> Result<(u64, u32, u32)> {
+    let first = store.page(0)?;
+    let last = store.page(store.page_count() - 1)?;
+    Ok((
+        store.page_count(),
+        crc32fast::hash(first.bytes()),
+        crc32fast::hash(last.bytes()),
+    ))
+}
+
+/// The result for a page that was never written: all zero, no key.
+fn unallocated_page(page: Page<'_>) -> DeobfuscatedPage {
+    let fit = SectorFit {
+        step: 0,
+        peak: 0,
+        runner_up: 0,
+        exact: true,
+    };
+    DeobfuscatedPage {
+        index: page.index(),
+        bytes: page.bytes().to_vec(),
+        bv: 0,
+        bv_source: BvSource::Unallocated,
+        confidence: Confidence::Verified,
+        evidence: vec![Evidence::Unallocated],
+        sectors: [fit; SECTORS_PER_PAGE],
+        warnings: Vec::new(),
+    }
 }
 
 impl ApModel {
@@ -527,15 +576,15 @@ impl ApModel {
         }
 
         if report.calibrated_pages == 0 {
-            let (err, code) = if report.pure_pages > 0 && plaintext_pages * 2 > report.pure_pages {
-                (Error::NotObfuscated, "not-obfuscated")
+            let (err, kind) = if report.pure_pages > 0 && plaintext_pages * 2 > report.pure_pages {
+                (Error::NotObfuscated, WarningKind::NotObfuscated)
             } else {
-                (Error::NoCalibration, "no-calibration")
+                (Error::NoCalibration, WarningKind::NoCalibration)
             };
             if !opts.leniency.contains(Leniency::KEYSTREAM) {
                 return Err(err);
             }
-            report.warnings.push(Warning::new(WarningKind::Other(code)));
+            report.warnings.push(Warning::new(kind));
         }
 
         Ok(ApModel {
@@ -589,6 +638,9 @@ impl ApModel {
             return Err(Error::StoreMismatch);
         }
         let page = store.page(pn)?;
+        if page.is_unallocated() {
+            return Ok(unallocated_page(page));
+        }
         let raw = page.bytes();
         let scan = scan_page(raw, pn);
         let anchors: BTreeSet<u8> = self
@@ -620,6 +672,9 @@ impl ApModel {
         // Page 0 is the plaintext superblock.
         for pn in (block * 16).max(1)..end {
             let page = store.page(pn)?;
+            if page.is_unallocated() {
+                continue;
+            }
             let raw = page.bytes();
             let scan = scan_page(raw, pn);
             if let Some(bv) = calibrated_bv(&scan, raw) {
@@ -636,10 +691,12 @@ impl ApModel {
 
     /// Deobfuscate using an explicitly supplied `bv`.
     ///
-    /// The caller is responsible for `bv`; it is not chosen or checked
-    /// against the model, but [`DeobfuscatedPage::confidence`] and
-    /// [`DeobfuscatedPage::evidence`] report whether the decoded page
-    /// supports it. Sector steps are still determined and checked.
+    /// `bv` is not chosen or checked against the model, but it must be
+    /// supported by the decoded page: a trailer row-count match, or two or
+    /// more exact sectors that agree with it and with each other. Without
+    /// that the call is [`Error::KeystreamUnverified`], or under
+    /// [`Leniency::KEYSTREAM`] a result with a warning. Sector steps are
+    /// determined and checked as in [`ApModel::deobfuscate`].
     pub fn deobfuscate_with_bv(
         page: Page<'_>,
         bv: u8,
@@ -651,6 +708,9 @@ impl ApModel {
                 expected: PAGE_SIZE,
                 got: raw.len(),
             });
+        }
+        if page.is_unallocated() {
+            return Ok(unallocated_page(page));
         }
         let pn = page.index();
         let scan = scan_page(raw, pn);
@@ -665,7 +725,16 @@ impl ApModel {
         if count >= MIN_EXACT_SECTORS {
             let dissent = votes.values().sum::<usize>() - count;
             evidence.push(Evidence::ExactSectors { count, dissent });
-            confidence = confidence.max(Confidence::Calibrated);
+            if dissent == 0 {
+                confidence = confidence.max(Confidence::Calibrated);
+            }
+        }
+        let mut warnings = Vec::new();
+        if confidence == Confidence::Unverified {
+            if !opts.leniency.contains(Leniency::KEYSTREAM) {
+                return Err(Error::KeystreamUnverified { page: pn, bv });
+            }
+            warnings.push(Warning::new(WarningKind::UnverifiedKeystream { bv }).on_page(pn));
         }
         let choice = Choice {
             bv,
@@ -673,7 +742,7 @@ impl ApModel {
             confidence,
             evidence,
         };
-        finish(page, &scan, choice, opts, Vec::new())
+        finish(page, &scan, choice, opts, warnings)
     }
 }
 
@@ -697,13 +766,16 @@ struct Candidate {
 }
 
 impl Candidate {
-    /// Rank used only when the caller allows an ambiguous page through:
-    /// more independent evidence first, then more zeros, then the lowest
-    /// `bv`. Greater is better.
-    fn rank(&self) -> (u8, usize, u32, std::cmp::Reverse<u8>) {
+    /// Rank used only when the caller allows an ambiguous page through: most
+    /// exact sectors first (a trailer match alone was the wrong one in every
+    /// corpus page where it disagreed with two exact sectors), then a trailer
+    /// match, a block anchor, more zeros, and the lowest `bv`. Greater is
+    /// better.
+    fn rank(&self) -> (usize, bool, bool, u32, std::cmp::Reverse<u8>) {
         (
-            self.trailer as u8 * 2 + self.anchor as u8,
             self.exact,
+            self.trailer,
+            self.anchor,
             self.zeros,
             std::cmp::Reverse(self.bv),
         )
@@ -766,7 +838,14 @@ fn calibrated_bv(scan: &PageScan, raw: &[u8]) -> Option<u8> {
     let a = assess(scan, raw, &BTreeSet::new());
     let verified: Vec<u8> = a.cands.iter().filter(|c| c.trailer).map(|c| c.bv).collect();
     match verified.as_slice() {
-        [bv] => return Some(*bv),
+        [bv] => {
+            // A trailer match that another exact vote contradicts is not safe.
+            let rival = a
+                .cands
+                .iter()
+                .any(|c| c.bv != *bv && c.exact >= MIN_EXACT_SECTORS);
+            return (!rival).then_some(*bv);
+        }
         [] => {}
         _ => return None,
     }
@@ -824,11 +903,14 @@ fn choose_bv(
         confidence,
         evidence: evidence_for(c),
     };
-    // Competing evidence: an error in strict mode, the best-ranked candidate
-    // plus a warning otherwise.
+    // Competing evidence: an error in strict mode. Under lenient options the
+    // best-ranked candidate (trailer match, then most exact sectors, then
+    // block anchor, then zeros) with a warning; never a minority vote while a
+    // majority exists.
     let ambiguous = |group: Vec<&Candidate>, warnings: &mut Vec<Warning>| -> Result<Choice> {
         let mut bvs: Vec<u8> = group.iter().map(|c| c.bv).collect();
         bvs.sort_unstable();
+        bvs.dedup();
         if !lenient {
             return Err(Error::AmbiguousCalibration {
                 page: pn,
@@ -850,15 +932,34 @@ fn choose_bv(
         Ok(pick(best, BvSource::Histogram, Confidence::Unverified))
     };
 
-    // 1. A structural check against the plaintext trailer.
+    // 1. A structural check against the plaintext trailer, unless something
+    //    else on the page contradicts it: two or more exact sectors that agree
+    //    on another bv, or a histogram top that matches another page's bv in
+    //    the block. A trailer match can be a coincidence (see
+    //    `trailer_row_count_matches`); the contradiction says it is not safe
+    //    to pick it silently.
     let verified: Vec<&Candidate> = cands.iter().filter(|c| c.trailer).collect();
     match verified.len() {
         0 => {}
-        1 => return Ok(pick(verified[0], BvSource::Verified, Confidence::Verified)),
+        1 => {
+            let v = verified[0];
+            let contradicts = |c: &&Candidate| {
+                c.bv != v.bv && (c.exact >= MIN_EXACT_SECTORS || (c.anchor && Some(c.bv) == top))
+            };
+            let rivals: Vec<&Candidate> = cands.iter().filter(contradicts).collect();
+            if rivals.is_empty() {
+                return Ok(pick(v, BvSource::TrailerRowCount, Confidence::Verified));
+            }
+            let mut group = rivals;
+            group.push(v);
+            return ambiguous(group, warnings);
+        }
         _ => return ambiguous(verified, warnings),
     }
 
-    // 2. Exact sectors agreeing with each other.
+    // 2. Exact sectors agreeing with each other. Any exact sector that
+    //    disagrees makes the page ambiguous: the block anchor is not allowed
+    //    to break the tie.
     if votes.len() == 1 {
         let (&bv, &n) = votes.iter().next().expect("one vote entry");
         if n >= MIN_EXACT_SECTORS {
@@ -869,45 +970,19 @@ fn choose_bv(
             return Ok(pick(c, BvSource::ExactSectors, Confidence::Calibrated));
         }
     } else if votes.len() > 1 {
-        // Exact sectors disagree. Another page's calibration may break the tie.
-        let anchored: Vec<&Candidate> = cands.iter().filter(|c| c.exact > 0 && c.anchor).collect();
-        if anchored.len() == 1 {
-            return Ok(pick(
-                anchored[0],
-                BvSource::Verified,
-                Confidence::Calibrated,
-            ));
-        }
         let group: Vec<&Candidate> = cands.iter().filter(|c| c.exact > 0).collect();
         return ambiguous(group, warnings);
     }
 
-    // 3. The best histogram candidate, confirmed by a calibrated page in the
-    //    same block.
-    let top_cand = top.and_then(|t| cands.iter().find(|c| c.bv == t));
-    let anchored_top: Vec<&Candidate> = top_cand.into_iter().filter(|c| c.anchor).collect();
-    let other_anchored: Vec<&Candidate> = cands
+    // 3. Nothing confirms the best histogram candidate. A block anchor that
+    //    equals it is listed as evidence but is not confirmation: `bv` takes
+    //    several values inside one block on about a third of the corpus's
+    //    blocks.
+    let top = top.expect("a page always has data bytes");
+    let c = cands
         .iter()
-        .filter(|c| c.anchor && Some(c.bv) != top)
-        .collect();
-    if let Some(c) = anchored_top.first() {
-        if other_anchored.is_empty() {
-            return Ok(pick(c, BvSource::Verified, Confidence::Calibrated));
-        }
-    }
-    if !other_anchored.is_empty() && cands.len() > 1 {
-        // The histogram and the block calibration point at different values.
-        let mut group = other_anchored;
-        group.extend(top_cand);
-        return ambiguous(group, warnings);
-    }
-
-    // 4. Nothing confirms the best histogram candidate.
-    let Some(c) = top_cand else {
-        // Every data byte decoded to a value that is not a candidate: cannot
-        // happen, a page always has data bytes.
-        return Err(Error::KeystreamUnverified { page: pn, bv: 0 });
-    };
+        .find(|c| c.bv == top)
+        .expect("the histogram top is a candidate");
     if !lenient {
         return Err(Error::KeystreamUnverified { page: pn, bv: c.bv });
     }
@@ -1122,6 +1197,33 @@ mod tests {
         let raw = encode_page(1, b'E', 0, 77, &noise(11, TRAILER_START));
         let page = Page::from_bytes(1, &raw).unwrap();
 
+        // Nothing supports the key either, so strict mode refuses first.
+        let err = ApModel::deobfuscate_with_bv(page, 77, &ReadOptions::default()).unwrap_err();
+        assert!(
+            matches!(err, Error::KeystreamUnverified { page: 1, bv: 77 }),
+            "{err:?}"
+        );
+
+        let lenient = ApModel::deobfuscate_with_bv(page, 77, &lenient_keystream()).unwrap();
+        assert_eq!(lenient.warnings().len(), SECTORS_PER_PAGE + 1);
+        assert!(lenient.sectors().iter().all(|s| !s.confident()));
+        assert_eq!(
+            lenient
+                .warnings()
+                .iter()
+                .filter(|w| matches!(w.kind, WarningKind::LowConfidenceSector { .. }))
+                .count(),
+            SECTORS_PER_PAGE
+        );
+    }
+
+    #[test]
+    fn one_dense_sector_is_a_strict_error_even_when_the_key_is_supported() {
+        // Sectors 1..8 are zero (exact, so bv is supported); sector 0 is dense.
+        let mut plain = vec![0u8; TRAILER_START];
+        plain[..SECTOR_SIZE].copy_from_slice(&noise(21, SECTOR_SIZE));
+        let raw = encode_page(1, b'E', 0, 77, &plain);
+        let page = Page::from_bytes(1, &raw).unwrap();
         let err = ApModel::deobfuscate_with_bv(page, 77, &ReadOptions::default()).unwrap_err();
         assert!(
             matches!(
@@ -1134,16 +1236,9 @@ mod tests {
             ),
             "{err:?}"
         );
-
         let lenient = ApModel::deobfuscate_with_bv(page, 77, &lenient_keystream()).unwrap();
-        assert_eq!(lenient.warnings().len(), SECTORS_PER_PAGE);
-        assert!(lenient.sectors().iter().all(|s| !s.confident()));
-        assert!(
-            lenient
-                .warnings()
-                .iter()
-                .all(|w| matches!(w.kind, WarningKind::LowConfidenceSector { .. }))
-        );
+        assert_eq!(lenient.warnings().len(), 1);
+        assert_eq!(lenient.warnings()[0].sector, Some(0));
     }
 
     #[test]
@@ -1217,8 +1312,13 @@ mod tests {
     fn trailer_row_count_rescues_a_space_padded_page() {
         // The same kind of page, but with a slotted prelude whose count
         // matches the plaintext trailer: that confirms the true bv even
-        // though the histogram prefers bv + 0x20.
-        let plain = slotted_plaintext(12, 0x20);
+        // though the histogram prefers bv + 0x20. (No sector is an exact
+        // space fill here, so nothing contradicts the trailer.)
+        let mut plain = slotted_plaintext(12, 0x20);
+        for si in 2..SECTORS_PER_PAGE {
+            let (start, _) = sector_range(si);
+            plain[start..start + 8].copy_from_slice(&noise(70 + si as u64, 8));
+        }
         let raw = encode_page(1, b'E', 12, 77, &plain);
         let store = store_of(&[pure_page(0, 5), raw]);
         let model = ApModel::learn(&store, &ReadOptions::default()).unwrap();
@@ -1329,38 +1429,153 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn block_anchor_confirms_a_page_with_no_other_evidence() {
-        // Dense-ish pages (noise at the start of every sector, zeros after):
-        // no exact sector, no prelude. One whose best histogram bv equals the
-        // bv of a calibrated page in the same block is Calibrated; one that
-        // disagrees stays Unverified.
+    /// Dense-ish plaintext: noise at the start of every sector, zeros after.
+    /// No sector is exact and there is no prelude.
+    fn dense_plaintext() -> Vec<u8> {
         let mut plain = vec![0u8; TRAILER_START];
         for si in 0..SECTORS_PER_PAGE {
             let (start, _) = sector_range(si);
             plain[start..start + 100].copy_from_slice(&noise(9 + si as u64, 100));
         }
+        plain
+    }
+
+    #[test]
+    fn a_block_anchor_alone_is_not_confirmation() {
+        // Review S1: a block often holds more than one bv, so agreeing with a
+        // calibrated page in the block is evidence, not confirmation.
+        let plain = dense_plaintext();
         let agree = encode_page(2, b'E', 0, 40, &plain);
-        let disagree = encode_page(3, b'E', 0, 41, &plain);
-        let store = store_of(&[pure_page(0, 5), pure_page(1, 40), agree, disagree]);
+        let store = store_of(&[pure_page(0, 5), pure_page(1, 40), agree]);
         let model = ApModel::learn(&store, &ReadOptions::default()).unwrap();
 
-        let ok = model
+        let err = model
             .deobfuscate(&store, 2, &ReadOptions::default())
-            .unwrap();
+            .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                Error::KeystreamUnverified {
+                    page: 2,
+                    bv: 40,
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
+        let ok = model.deobfuscate(&store, 2, &lenient_keystream()).unwrap();
         assert_eq!(ok.bv(), 40);
         assert!(ok.evidence().contains(&Evidence::BlockAnchor));
-        assert_eq!(ok.confidence(), Confidence::Calibrated);
-
-        let err = model
-            .deobfuscate(&store, 3, &ReadOptions::default())
-            .unwrap_err();
+        assert_eq!(ok.confidence(), Confidence::Unverified);
         assert!(matches!(
-            err,
-            Error::KeystreamUnverified { page: 3, bv: 41 }
+            ok.warnings()[0].kind,
+            WarningKind::UnverifiedKeystream { .. }
         ));
-        let other = model.deobfuscate(&store, 3, &lenient_keystream()).unwrap();
-        assert_eq!(other.confidence(), Confidence::Unverified);
+    }
+
+    /// Plaintext of a page whose *decoded-at-`wrong_bv`* form has a slotted
+    /// prelude with `count` and `filler` bytes elsewhere, and zero true
+    /// plaintext. With the true `bv = wrong_bv + 1` the page is the filler
+    /// page of review B1 (`0x01` filler at the wrong key).
+    fn clone_page_plaintext(count: u16, array_start: usize) -> Vec<u8> {
+        let mut decoded = vec![0x01u8; TRAILER_START];
+        let field = array_start - 6;
+        decoded[field..field + 2].copy_from_slice(&count.to_le_bytes());
+        decoded[field + 2..field + 6].fill(0);
+        for k in 0..8usize {
+            let off = 0xF00u16 - 0x21 * k as u16;
+            decoded[array_start + 2 * k..array_start + 2 * k + 2]
+                .copy_from_slice(&off.to_le_bytes());
+        }
+        decoded.iter().map(|b| b.wrapping_sub(1)).collect()
+    }
+
+    #[test]
+    fn a_count_of_one_does_not_verify_a_key_that_is_off_by_one() {
+        // Review B1 (E page 3433 of the "Managing Company Files" clones):
+        // trailer count 1, exact sectors at bv 1, but a `01 00` word followed
+        // by a descending run at bv 0 made bv 0 "Verified".
+        let plain = clone_page_plaintext(1, 0x80);
+        let raw = encode_page(1, b'E', 1, 1, &plain);
+        let store = store_of(&[pure_page(0, 1), raw]);
+        let model = ApModel::learn(&store, &ReadOptions::default()).unwrap();
+        let out = model
+            .deobfuscate(&store, 1, &ReadOptions::default())
+            .unwrap();
+        assert_eq!(out.bv(), 1);
+        assert_eq!(out.bv_source(), BvSource::ExactSectors);
+        assert_eq!(out.confidence(), Confidence::Calibrated);
+        assert!(!out.evidence().contains(&Evidence::TrailerRowCount));
+    }
+
+    #[test]
+    fn a_trailer_match_that_exact_sectors_contradict_is_ambiguous() {
+        // Review B1 (A page 2874 of B22 Chapter 13): count 5 matches at the
+        // wrong bv while three exact sectors vote for the right one. The
+        // trailer rule was wrong in all 6 corpus pages where they disagreed.
+        let plain = clone_page_plaintext(5, 0x80);
+        let raw = encode_page(1, b'E', 5, 1, &plain);
+        let store = store_of(&[pure_page(0, 1), raw]);
+        let model = ApModel::learn(&store, &ReadOptions::default()).unwrap();
+        let err = model
+            .deobfuscate(&store, 1, &ReadOptions::default())
+            .unwrap_err();
+        assert!(
+            matches!(&err, Error::AmbiguousCalibration { page: 1, candidates } if candidates == &vec![0, 1]),
+            "{err:?}"
+        );
+        // Lenient reads pick the exact-sector vote, not the trailer match.
+        let lenient = model.deobfuscate(&store, 1, &lenient_keystream()).unwrap();
+        assert_eq!(lenient.bv(), 1);
+        assert_eq!(lenient.confidence(), Confidence::Unverified);
+    }
+
+    #[test]
+    fn dissenting_exact_sectors_are_never_resolved_by_an_anchor() {
+        // Review S2: five sectors vote 86, one votes 88; a calibrated page in
+        // the block has 88, and the old code chose the minority.
+        let mut plain = vec![0u8; TRAILER_START];
+        for b in &mut plain[5 * SECTOR_SIZE..6 * SECTOR_SIZE] {
+            *b = 2;
+        }
+        plain[7 * SECTOR_SIZE..7 * SECTOR_SIZE + 60].copy_from_slice(&noise(4, 60));
+        let raw = encode_page(2, b'E', 0, 86, &plain);
+        let store = store_of(&[pure_page(0, 5), pure_page(1, 88), raw]);
+        let model = ApModel::learn(&store, &ReadOptions::default()).unwrap();
+        let err = model
+            .deobfuscate(&store, 2, &ReadOptions::default())
+            .unwrap_err();
+        assert!(
+            matches!(&err, Error::AmbiguousCalibration { page: 2, candidates } if candidates == &vec![86, 88]),
+            "{err:?}"
+        );
+        let lenient = model.deobfuscate(&store, 2, &lenient_keystream()).unwrap();
+        assert_eq!(lenient.bv(), 86, "the majority, not the anchored minority");
+        assert!(matches!(
+            lenient.warnings()[0].kind,
+            WarningKind::AmbiguousCalibration { chosen: 86, .. }
+        ));
+    }
+
+    #[test]
+    fn a_zero_page_is_unallocated_not_guessed() {
+        // Review S3: an all-zero page went through the keystream guesser and
+        // came back as AmbiguousCalibration (strict) or garbage (lenient).
+        let store = store_of(&[pure_page(0, 3), pure_page(1, 3), vec![0u8; PAGE_SIZE]]);
+        let model = ApModel::learn(&store, &ReadOptions::default()).unwrap();
+        for opts in [ReadOptions::default(), lenient_keystream()] {
+            let out = model.deobfuscate(&store, 2, &opts).unwrap();
+            assert!(out.unallocated());
+            assert_eq!(out.bv_source(), BvSource::Unallocated);
+            assert!(out.bytes().iter().all(|&b| b == 0));
+            assert!(out.warnings().is_empty());
+        }
+        let page = store.page(2).unwrap();
+        assert!(
+            ApModel::deobfuscate_with_bv(page, 9, &ReadOptions::default())
+                .unwrap()
+                .unallocated()
+        );
     }
 
     #[test]
@@ -1389,8 +1604,20 @@ mod tests {
         let right = ApModel::deobfuscate_with_bv(page, 77, &ReadOptions::default()).unwrap();
         assert_eq!(right.confidence(), Confidence::Verified);
         assert_eq!(right.bv_source(), BvSource::Supplied);
-        let wrong = ApModel::deobfuscate_with_bv(page, 78, &ReadOptions::default()).unwrap();
+        assert!(right.warnings().is_empty());
+        // Review B3: an unsupported key was returned Ok, Unverified, with no
+        // warning in strict mode.
+        let err = ApModel::deobfuscate_with_bv(page, 78, &ReadOptions::default()).unwrap_err();
+        assert!(
+            matches!(err, Error::KeystreamUnverified { page: 2, bv: 78 }),
+            "{err:?}"
+        );
+        let wrong = ApModel::deobfuscate_with_bv(page, 78, &lenient_keystream()).unwrap();
         assert_eq!(wrong.confidence(), Confidence::Unverified);
+        assert!(matches!(
+            wrong.warnings()[0].kind,
+            WarningKind::UnverifiedKeystream { bv: 78 }
+        ));
     }
 
     #[test]

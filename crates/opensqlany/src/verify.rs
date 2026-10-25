@@ -6,6 +6,13 @@
 use crate::page::PAGE_SIZE;
 use crate::slotted::find_slot_directory;
 
+/// Smallest trailer count the check trusts. For a count of 1 or 2 the pair
+/// `(count, 0)` is the commonest word in page data, so a match carries almost
+/// no information: it was wrong at 5 of 887 matches for count 1 on the
+/// corpus, and nothing below 4 is reliable enough to rank above exact
+/// sectors.
+const MIN_TRAILER_COUNT: u8 = 4;
+
 /// `true` when the page prelude's row count equals the trailer's count byte.
 ///
 /// Slotted pages store their row count twice: in the plaintext trailer
@@ -22,7 +29,7 @@ pub(crate) fn trailer_row_count_matches(plain: &[u8]) -> bool {
         return false;
     }
     let count = plain[0xFF0];
-    if count == 0 {
+    if count < MIN_TRAILER_COUNT {
         return false;
     }
     let Some(dir) = find_slot_directory(plain) else {
