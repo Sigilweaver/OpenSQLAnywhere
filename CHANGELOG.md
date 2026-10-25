@@ -34,6 +34,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     private fields with accessors (`PageTrailer::raw()` returns the 12
     trailer bytes). `PageTrailer::case_variant()` reports the lowercase
     page-type bit.
+  - Struct-like variants of `Error` and `WarningKind` are
+    `#[non_exhaustive]`: match them with `..`.
+  - `WarningKind` has a typed variant for every condition the crate reports;
+    `WarningKind::Other` is for dependent crates. `Warning::new`, `on_page`
+    and `on_sector` are public.
+  - `ReadOptions::lenient()` relaxes exactly `KEYSTREAM`, `DIRECTORY`,
+    `INTEGRITY` and `FORMAT`; a flag added later is not added to it.
+    `ReadOptions::widest()` and `Leniency::every_known()` widen with each
+    release.
+  - `WrongBufferLength` and `PageOutOfRange` have kind `ErrorKind::Usage`.
   - `PageType` is `#[non_exhaustive]`; `PageType::UnknownG` is removed and
     `'G'` classifies as `PageType::Other(b'G')`.
   - New `Superblock::format() -> FormatVersion`.
