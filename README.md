@@ -40,9 +40,10 @@ use opensqlany::PageStore;
 
 let store = PageStore::open("database.db")?;
 let sb = store.superblock()?;
-println!("format {}.{}.{}", sb.format_major, sb.version_a, sb.version_b);
+println!("format {}", sb.format());
 
 for page in store.pages().skip(1) {
+    let page = page?;
     page.verify_crc()?;
     let t = page.trailer();
     println!("page {} type {:?}", page.index(), t.page_type());

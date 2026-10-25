@@ -6,6 +6,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** the API is reshaped so later fixes ship without another
+  major release.
+  - `Error` is `#[non_exhaustive]`, gains `Error::kind() -> ErrorKind` and
+    `Error::page()`, and carries the variants the decoders report:
+    `ShortRead`, `WrongBufferLength`, `UnsupportedVersion`, `NoCalibration`,
+    `NotObfuscated`, `LowConfidenceKeystream`, `AmbiguousCalibration`,
+    `KeystreamUnverified`, `SlotOffsetInDirectory`, `AmbiguousSlotDirectory`,
+    `SlotDirectoryTruncated`, `UnknownPrelude` and `NoSlotDirectory`.
+  - New `ReadOptions` (strict by default) with one extensible `Leniency`
+    set, and new `Warning` / `WarningKind` for conditions a lenient read
+    accepted.
+  - `ApModel::learn`, `ApModel::deobfuscate` (formerly
+    `deobfuscate_with_store`), `ApModel::deobfuscate_with_bv` and
+    `SlottedPage::parse` take `&ReadOptions` and return `Result`.
+    Deobfuscation returns a `DeobfuscatedPage` (plaintext, `bv`, per-sector
+    `SectorFit`, warnings) instead of a bare `Vec<u8>`.
+  - `SlottedPage::row_bytes` becomes `SlottedPage::rows`, returning `Row`
+    values with an `exact` flag instead of `(u16, &[u8])` tuples.
+  - `PageStore::pages` yields `Result<Page>`.
+  - `Page::from_bytes` and `Superblock::parse` return `Result` instead of
+    panicking on a wrong-length buffer, and `Page::from_bytes` no longer
+    truncates a longer buffer.
+  - `PageTrailer`, `Superblock`, `SlotDirectory` and `SlottedPage` have
+    private fields with accessors (`PageTrailer::raw()` returns the 12
+    trailer bytes). `PageTrailer::case_variant()` reports the lowercase
+    page-type bit.
+  - `PageType` is `#[non_exhaustive]`; `PageType::UnknownG` is removed and
+    `'G'` classifies as `PageType::Other(b'G')`.
+  - New `Superblock::format() -> FormatVersion`.
+  - The calibration helpers `ApModel::bv_at`, `deobfuscate` (block
+    level), `recover_bv_for_block` and `recover_bv_for_page` are removed,
+    along with `Default for ApModel`; they guessed a key silently.
+  - `SlottedPage::overflow_prefix` is removed: it returned the page prelude
+    as if it were record data.
+
 ## [0.2.0] - 2026-09-09
 
 ### Changed
