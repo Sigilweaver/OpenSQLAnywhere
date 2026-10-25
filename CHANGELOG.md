@@ -49,8 +49,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   about a third of blocks hold more than one `bv`. See the pull request for
   the breakdown by error kind.
 - `BvSource` is `TrailerRowCount`, `ExactSectors`, `Histogram`, `Supplied` or
-  `Unallocated`; `Confidence::Verified` means only the trailer check (or an
-  unallocated page).
+  `Unallocated`; `Confidence::Verified` means only the trailer check. An unallocated page
+  is `Confidence::Unallocated` and `DeobfuscatedPage::bv()` is `None`: it was
+  never keyed.
 
 ### Changed
 

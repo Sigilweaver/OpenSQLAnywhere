@@ -314,8 +314,9 @@ fn deob(path: &std::path::Path, pn: u64, raw: bool, lenient: bool) -> Result<()>
         pt, plain[0xFF2], plain[0xFF0], plain[0xFF1],
     );
     println!(
-        "bv 0x{:02X}  source {:?}  confidence {:?}",
-        dec.bv(),
+        "bv {}  source {:?}  confidence {:?}",
+        dec.bv()
+            .map_or_else(|| "none".to_string(), |b| format!("0x{b:02X}")),
         dec.bv_source(),
         dec.confidence()
     );

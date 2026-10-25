@@ -256,9 +256,13 @@ pub enum BvSource {
 /// How far a page's `bv` can be trusted.
 ///
 /// Variants are ordered from least to most trusted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Confidence {
+    /// The page was never written: every byte is zero and no key applies, so
+    /// there is no `bv` ([`DeobfuscatedPage::bv`] is `None`). It is a state of
+    /// its own, not a degree of trust.
+    Unallocated,
     /// Nothing independent confirmed the guess; [`Evidence::BlockAnchor`] and
     /// [`Evidence::ZeroMass`] do not count as confirmation. Only returned
     /// under
@@ -270,8 +274,7 @@ pub enum Confidence {
     /// their plaintext is zero.
     Calibrated,
     /// The decoded page matched a structural check against plaintext that is
-    /// not obfuscated ([`Evidence::TrailerRowCount`]), or it was never
-    /// written and needs no key ([`Evidence::Unallocated`]).
+    /// not obfuscated ([`Evidence::TrailerRowCount`]),
     Verified,
 }
 
@@ -397,9 +400,10 @@ impl DeobfuscatedPage {
         self.bv_source == BvSource::Unallocated
     }
 
-    /// The calibration byte used for this page (0 for an unallocated page).
-    pub fn bv(&self) -> u8 {
-        self.bv
+    /// The calibration byte used for this page; `None` for an unallocated page,
+    /// which was never keyed.
+    pub fn bv(&self) -> Option<u8> {
+        (self.bv_source != BvSource::Unallocated).then_some(self.bv)
     }
 
     /// How [`Self::bv`] was determined.
@@ -515,7 +519,7 @@ fn unallocated_page(page: Page<'_>) -> DeobfuscatedPage {
         bytes: page.bytes().to_vec(),
         bv: 0,
         bv_source: BvSource::Unallocated,
-        confidence: Confidence::Verified,
+        confidence: Confidence::Unallocated,
         evidence: vec![Evidence::Unallocated],
         sectors: [fit; SECTORS_PER_PAGE],
         warnings: Vec::new(),
@@ -717,17 +721,17 @@ impl ApModel {
         let votes = exact_votes(raw, pn);
         let mut evidence = Vec::new();
         let mut confidence = Confidence::Unverified;
-        if trailer_row_count_matches(&plaintext(&scan, raw, bv)) {
-            evidence.push(Evidence::TrailerRowCount);
-            confidence = Confidence::Verified;
-        }
         let count = votes.get(&bv).copied().unwrap_or(0);
+        let dissent = votes.values().sum::<usize>() - count;
         if count >= MIN_EXACT_SECTORS {
-            let dissent = votes.values().sum::<usize>() - count;
             evidence.push(Evidence::ExactSectors { count, dissent });
             if dissent == 0 {
-                confidence = confidence.max(Confidence::Calibrated);
+                confidence = Confidence::Calibrated;
             }
+        }
+        if trailer_row_count_matches(&plaintext(&scan, raw, bv)) {
+            evidence.insert(0, Evidence::TrailerRowCount);
+            confidence = Confidence::Verified;
         }
         let mut warnings = Vec::new();
         if confidence == Confidence::Unverified {
@@ -1184,7 +1188,7 @@ mod tests {
         assert_eq!(model.report().calibrated_pages(), 2);
 
         let page = model.deobfuscate(&store, 1, &strict).unwrap();
-        assert_eq!(page.bv(), 200);
+        assert_eq!(page.bv(), Some(200));
         assert_eq!(page.confidence(), Confidence::Calibrated);
         assert!(page.bytes()[..TRAILER_START].iter().all(|&b| b == 0));
         assert!(page.warnings().is_empty());
@@ -1325,7 +1329,7 @@ mod tests {
         let out = model
             .deobfuscate(&store, 1, &ReadOptions::default())
             .unwrap();
-        assert_eq!(out.bv(), 77);
+        assert_eq!(out.bv(), Some(77));
         assert_eq!(out.confidence(), Confidence::Verified);
         assert!(out.evidence().contains(&Evidence::TrailerRowCount));
         assert_eq!(&out.bytes()[..TRAILER_START], &plain[..]);
@@ -1464,7 +1468,7 @@ mod tests {
             "{err:?}"
         );
         let ok = model.deobfuscate(&store, 2, &lenient_keystream()).unwrap();
-        assert_eq!(ok.bv(), 40);
+        assert_eq!(ok.bv(), Some(40));
         assert!(ok.evidence().contains(&Evidence::BlockAnchor));
         assert_eq!(ok.confidence(), Confidence::Unverified);
         assert!(matches!(
@@ -1502,7 +1506,7 @@ mod tests {
         let out = model
             .deobfuscate(&store, 1, &ReadOptions::default())
             .unwrap();
-        assert_eq!(out.bv(), 1);
+        assert_eq!(out.bv(), Some(1));
         assert_eq!(out.bv_source(), BvSource::ExactSectors);
         assert_eq!(out.confidence(), Confidence::Calibrated);
         assert!(!out.evidence().contains(&Evidence::TrailerRowCount));
@@ -1526,7 +1530,7 @@ mod tests {
         );
         // Lenient reads pick the exact-sector vote, not the trailer match.
         let lenient = model.deobfuscate(&store, 1, &lenient_keystream()).unwrap();
-        assert_eq!(lenient.bv(), 1);
+        assert_eq!(lenient.bv(), Some(1));
         assert_eq!(lenient.confidence(), Confidence::Unverified);
     }
 
@@ -1550,7 +1554,11 @@ mod tests {
             "{err:?}"
         );
         let lenient = model.deobfuscate(&store, 2, &lenient_keystream()).unwrap();
-        assert_eq!(lenient.bv(), 86, "the majority, not the anchored minority");
+        assert_eq!(
+            lenient.bv(),
+            Some(86),
+            "the majority, not the anchored minority"
+        );
         assert!(matches!(
             lenient.warnings()[0].kind,
             WarningKind::AmbiguousCalibration { chosen: 86, .. }
@@ -1566,6 +1574,8 @@ mod tests {
         for opts in [ReadOptions::default(), lenient_keystream()] {
             let out = model.deobfuscate(&store, 2, &opts).unwrap();
             assert!(out.unallocated());
+            assert_eq!(out.bv(), None);
+            assert_eq!(out.confidence(), Confidence::Unallocated);
             assert_eq!(out.bv_source(), BvSource::Unallocated);
             assert!(out.bytes().iter().all(|&b| b == 0));
             assert!(out.warnings().is_empty());
