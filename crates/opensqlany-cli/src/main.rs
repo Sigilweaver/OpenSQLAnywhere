@@ -88,7 +88,7 @@ fn main() -> Result<()> {
 }
 
 fn inspect(path: &std::path::Path, verify_crc: bool) -> Result<()> {
-    let store = PageStore::open(path).with_context(|| format!("opening {path:?}"))?;
+    let store = PageStore::open_unchecked(path).with_context(|| format!("opening {path:?}"))?;
     let sb = store.try_superblock()?;
     let total = store.page_count();
 
@@ -130,6 +130,13 @@ fn inspect(path: &std::path::Path, verify_crc: bool) -> Result<()> {
     );
 
     let mut histogram: BTreeMap<u8, u64> = BTreeMap::new();
+    let mut problems: Vec<String> = Vec::new();
+    if !sb.magic_ok() {
+        problems.push("superblock magic mismatch".to_string());
+    }
+    if sb.format() != opensqlany::FormatVersion::SA17 {
+        problems.push(format!("unsupported format version {}", sb.format()));
+    }
     let mut crc_failures: Vec<u64> = Vec::new();
     let mut trailer_failures: Vec<u64> = Vec::new();
 
@@ -160,6 +167,35 @@ fn inspect(path: &std::path::Path, verify_crc: bool) -> Result<()> {
         println!("  - page {pn}");
     }
 
+    if !crc_failures.is_empty() {
+        problems.push(format!("{} pages fail their CRC", crc_failures.len()));
+    }
+    if !trailer_failures.is_empty() {
+        problems.push(format!(
+            "{} pages fail the trailer check",
+            trailer_failures.len()
+        ));
+    }
+    if sb.magic_ok() {
+        let c = store.consistency()?;
+        println!(
+            "consistency       : {} pages, hint {} ({}); max page LSN {}, superblock LSN {} ({})",
+            c.page_count(),
+            c.page_count_hint(),
+            if c.page_count_matches() {
+                "matches"
+            } else {
+                "differs"
+            },
+            c.max_page_lsn(),
+            c.current_lsn(),
+            match c.lsn_gap() {
+                Some(gap) => format!("gap {gap}"),
+                None => "page LSN is higher".to_string(),
+            },
+        );
+    }
+
     println!();
     println!("page-type histogram:");
     let mut items: Vec<_> = histogram.into_iter().collect();
@@ -178,11 +214,14 @@ fn inspect(path: &std::path::Path, verify_crc: bool) -> Result<()> {
             pct = 100.0 * count as f64 / denom,
         );
     }
+    if !problems.is_empty() {
+        anyhow::bail!("{}: {}", path.display(), problems.join("; "));
+    }
     Ok(())
 }
 
 fn dump_page(path: &std::path::Path, pn: u64) -> Result<()> {
-    let store = PageStore::open(path)?;
+    let store = PageStore::open_unchecked(path)?;
     let page = store.page(pn)?;
     let t = page.trailer();
 
@@ -208,11 +247,15 @@ fn dump_page(path: &std::path::Path, pn: u64) -> Result<()> {
     println!();
 
     hexdump(page.bytes(), 0);
+    if page.stored_crc() != page.computed_crc() && !page.is_unallocated() {
+        anyhow::bail!("page {pn}: stored CRC does not match");
+    }
     Ok(())
 }
 
 fn slots(path: &std::path::Path, pn: u64, lenient: bool) -> Result<()> {
-    let store = PageStore::open(path)?;
+    let store = PageStore::open_with(path, &read_options(lenient))?;
+    print_store_warnings(&store);
     let page = store.page(pn)?;
     let slotted = SlottedPage::parse(page, &read_options(lenient))?;
     let t = page.trailer();
@@ -271,6 +314,12 @@ fn slots(path: &std::path::Path, pn: u64, lenient: bool) -> Result<()> {
     Ok(())
 }
 
+fn print_store_warnings(store: &PageStore) {
+    for w in store.warnings() {
+        println!("warning: {w}");
+    }
+}
+
 fn read_options(lenient: bool) -> ReadOptions {
     if lenient {
         ReadOptions::lenient()
@@ -280,9 +329,11 @@ fn read_options(lenient: bool) -> ReadOptions {
 }
 
 fn ap_info(path: &std::path::Path, lenient: bool) -> Result<()> {
-    let store = PageStore::open(path).with_context(|| format!("opening {path:?}"))?;
+    let store = PageStore::open_with(path, &read_options(lenient))
+        .with_context(|| format!("opening {path:?}"))?;
+    print_store_warnings(&store);
     print!("Learning AP model from {}... ", path.display());
-    std::io::Write::flush(&mut std::io::stdout()).ok();
+    std::io::Write::flush(&mut std::io::stdout())?;
     let model = ApModel::learn(&store, &read_options(lenient))?;
     println!("done.");
     let report = model.report();
@@ -302,7 +353,13 @@ fn ap_info(path: &std::path::Path, lenient: bool) -> Result<()> {
 }
 
 fn deob(path: &std::path::Path, pn: u64, raw: bool, lenient: bool) -> Result<()> {
-    let store = PageStore::open(path).with_context(|| format!("opening {path:?}"))?;
+    let store = if raw {
+        PageStore::open_unchecked(path)
+    } else {
+        PageStore::open_with(path, &read_options(lenient))
+    }
+    .with_context(|| format!("opening {path:?}"))?;
+    print_store_warnings(&store);
     let page = store.page(pn)?;
     let t = page.trailer();
 

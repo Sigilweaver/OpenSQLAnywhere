@@ -454,6 +454,7 @@ pub struct LearnReport {
     pure_pages: usize,
     calibrated_pages: usize,
     ambiguous_pages: usize,
+    bad_pages: usize,
     warnings: Vec<Warning>,
 }
 
@@ -475,7 +476,14 @@ impl LearnReport {
         self.ambiguous_pages
     }
 
-    /// Conditions accepted under lenient [`ReadOptions`].
+    /// Pure-AP pages left out of calibration because their CRC or trailer
+    /// check failed. Each has a warning in [`LearnReport::warnings`].
+    pub fn bad_pages(&self) -> usize {
+        self.bad_pages
+    }
+
+    /// Conditions found while calibrating: pages left out, and, under
+    /// lenient [`ReadOptions`], a store that could not be calibrated.
     pub fn warnings(&self) -> &[Warning] {
         &self.warnings
     }
@@ -564,6 +572,11 @@ impl ApModel {
         for page in store.pages() {
             let page = page?;
             if !is_pure_ap_type(page.trailer().page_type_raw()) {
+                continue;
+            }
+            if let Err(err) = check_integrity(page) {
+                report.bad_pages += 1;
+                report.warnings.push(integrity_warning(&err, page.index()));
                 continue;
             }
             report.pure_pages += 1;
@@ -659,6 +672,13 @@ impl ApModel {
         if page.is_unallocated() {
             return Ok(unallocated_page(page));
         }
+        let mut warnings = Vec::new();
+        if let Err(err) = check_integrity(page) {
+            if !opts.leniency.contains(Leniency::INTEGRITY) {
+                return Err(err);
+            }
+            warnings.push(integrity_warning(&err, pn));
+        }
         let raw = page.bytes();
         let scan = scan_page(raw, pn);
         let anchors: BTreeSet<u8> = self
@@ -667,7 +687,6 @@ impl ApModel {
             .filter(|&&(apn, _)| apn != pn)
             .map(|&(_, bv)| bv)
             .collect();
-        let mut warnings = Vec::new();
         let choice = choose_bv(&scan, raw, pn, &anchors, opts, &mut warnings)?;
         finish(page, &scan, choice, opts, warnings)
     }
@@ -690,7 +709,7 @@ impl ApModel {
         // Page 0 is the plaintext superblock.
         for pn in (block * 16).max(1)..end {
             let page = store.page(pn)?;
-            if page.is_unallocated() {
+            if page.is_unallocated() || check_integrity(page).is_err() {
                 continue;
             }
             let raw = page.bytes();
@@ -762,6 +781,24 @@ impl ApModel {
         };
         finish(page, &scan, choice, opts, warnings)
     }
+}
+
+/// CRC and trailer check of a stored page. An all-zero page is unallocated
+/// and passes.
+fn check_integrity(page: Page<'_>) -> Result<()> {
+    if page.is_unallocated() {
+        return Ok(());
+    }
+    page.verify_crc()?;
+    page.verify_trailer()
+}
+
+fn integrity_warning(err: &Error, pn: u64) -> Warning {
+    let kind = match err {
+        Error::BadCrc { .. } => WarningKind::BadCrc,
+        _ => WarningKind::BadTrailer,
+    };
+    Warning::new(kind).on_page(pn)
 }
 
 // ---------------------------------------------------------------------------
@@ -1148,11 +1185,13 @@ mod tests {
         }
         out[TRAILER_START] = count;
         out[TRAILER_START + 2] = ptype;
+        let crc = crc32fast::hash(&out[..0xFFC]);
+        out[0xFFC..].copy_from_slice(&crc.to_le_bytes());
         out
     }
 
     fn store_of(pages: &[Vec<u8>]) -> PageStore {
-        PageStore::from_bytes(pages.concat()).unwrap()
+        PageStore::from_bytes_unchecked(pages.concat()).unwrap()
     }
 
     /// A pure-AP page: all-zero plaintext.
@@ -1439,6 +1478,8 @@ mod tests {
         // garbage from an all-zero page.
         let mut page = vec![0u8; PAGE_SIZE];
         page[TRAILER_START + 2] = b'C';
+        let crc = crc32fast::hash(&page[..0xFFC]);
+        page[0xFFC..].copy_from_slice(&crc.to_le_bytes());
         let store = store_of(&[page.clone(), page.clone(), page]);
         let err = ApModel::learn(&store, &ReadOptions::default()).unwrap_err();
         assert!(matches!(err, Error::NotObfuscated), "{err:?}");
@@ -1453,6 +1494,25 @@ mod tests {
         let model = ApModel::learn(&store, &ReadOptions::default()).unwrap();
         assert_eq!(model.report().pure_pages(), 2);
         assert_eq!(model.report().calibrated_pages(), 2);
+    }
+
+    #[test]
+    fn a_page_with_a_bad_crc_is_not_decoded_or_calibrated() {
+        // Audit finding 10: torn or rotted pages fed calibration and
+        // decoding with no check.
+        let mut bad = pure_page(2, 9);
+        bad[0xFFC] ^= 0xFF;
+        let store = store_of(&[pure_page(0, 9), pure_page(1, 9), bad]);
+        let model = ApModel::learn(&store, &ReadOptions::default()).unwrap();
+        assert_eq!(model.report().bad_pages(), 1);
+        assert_eq!(model.report().pure_pages(), 2);
+        assert!(matches!(
+            model.deobfuscate(&store, 2, &ReadOptions::default()),
+            Err(Error::BadCrc { page: 2, .. })
+        ));
+        let opts = ReadOptions::default().with_leniency(Leniency::INTEGRITY);
+        let page = model.deobfuscate(&store, 2, &opts).unwrap();
+        assert!(matches!(page.warnings()[0].kind, WarningKind::BadCrc));
     }
 
     #[test]

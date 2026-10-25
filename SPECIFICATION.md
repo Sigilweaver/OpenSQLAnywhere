@@ -77,8 +77,9 @@ Three independent in-file relationships support the reading (measured by
 an independent reader across three files, reported in
 [opensqlany#7](https://github.com/Sigilweaver/OpenSQLAnywhere/issues/7)):
 
-1. The maximum per-page value is exactly ten less than the u32 at
-   superblock `0x08` (§3.1a):
+1. The maximum per-page value is ten less than the u32 at
+   superblock `0x08` (§3.1a) in these three files. Across the 112-file
+   corpus it holds on 83 files; on the other 29 the gap is exactly 14:
 
    | file | superblock `0x08` | max page `0xFF4` | difference |
    |---|---:|---:|---:|
@@ -153,14 +154,17 @@ collation block (§3.3) and a rolling copyright fingerprint (§3.4).
 **observed**: the u32 at `0x08` is the file's current log sequence
 number, not the low half of a per-file identifier. It is unique per file
 in practice, which is what the identifier reading was based on, but it
-behaves as a write counter: it is exactly ten greater than the highest
-per-page LSN in every file measured (§2.2a), and the four bytes at `0x0C`
-that a 64-bit identifier would occupy are always zero.
+behaves as a write counter: it is ten greater than the highest per-page
+LSN on 83 of the 112 corpus files and fourteen greater on the other 29
+(§2.2a). The gap is therefore not a torn-checkpoint test: every one of
+those 29 files has clean CRCs. The four bytes at `0x0C` that a 64-bit
+identifier would occupy are always zero.
 
 ### 3.2 Page-count hint
 
-**observed**: `page_count_hint == total_pages - 128` in 112 / 112 files
-when `total_pages >= 128`. **Inferred**: the first 128 pages are
+**observed**: `page_count_hint == total_pages - 128` on 109 of 112 files.
+The other three (3,000+ pages each, clean CRCs) differ by 242, 197 and 78,
+so the hint is not a truncation test. **Inferred**: the first 128 pages are
 reserved metadata and the hint counts data pages after them.
 
 ### 3.3 Collation / codepage block (~0x162..0x1FF)

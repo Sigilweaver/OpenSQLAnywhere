@@ -105,10 +105,11 @@ impl Superblock {
     /// u32_LE at offset 0x08 - the file's current log sequence number.
     ///
     /// Previously read as the low half of a per-file identifier. It is a
-    /// write counter: across every file measured, the highest per-page
-    /// [`PageTrailer::lsn`](crate::PageTrailer::lsn) is exactly this value
-    /// minus ten, and offset `0x0C` - which a 64-bit identifier would need
-    /// - is always zero. See `SPECIFICATION.md` section 3.1a.
+    /// write counter: the highest per-page
+    /// [`PageTrailer::lsn`](crate::PageTrailer::lsn) is this value minus ten
+    /// on 83 of the 112 corpus files and minus fourteen on the rest, and
+    /// offset `0x0C` - which a 64-bit identifier would need - is always zero.
+    /// See `SPECIFICATION.md` section 3.1a.
     #[inline]
     pub fn current_lsn(&self) -> u32 {
         self.current_lsn
@@ -148,7 +149,7 @@ impl Superblock {
         self.version_b
     }
 
-    /// u32_LE at offset 0x1C. Typically `total_pages - 128`.
+    /// u32_LE at offset 0x1C. `total_pages - 128` on 109 of 112 corpus files.
     #[inline]
     pub fn page_count_hint(&self) -> u32 {
         self.page_count_hint
