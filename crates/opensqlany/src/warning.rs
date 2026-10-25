@@ -17,7 +17,11 @@ pub struct Warning {
 
 #[allow(dead_code)] // constructors are used once the decoders emit warnings
 impl Warning {
-    pub(crate) fn new(kind: WarningKind) -> Self {
+    /// A warning of `kind` that is not yet tied to a page or sector.
+    ///
+    /// Public so that crates built on this one can add their own warnings
+    /// (with [`WarningKind::Other`]) to the lists they return.
+    pub fn new(kind: WarningKind) -> Self {
         Warning {
             kind,
             page: None,
@@ -25,12 +29,14 @@ impl Warning {
         }
     }
 
-    pub(crate) fn on_page(mut self, page: u64) -> Self {
+    /// This warning, attached to page `page`.
+    pub fn on_page(mut self, page: u64) -> Self {
         self.page = Some(page);
         self
     }
 
-    pub(crate) fn on_sector(mut self, sector: usize) -> Self {
+    /// This warning, attached to sector `sector` of its page.
+    pub fn on_sector(mut self, sector: usize) -> Self {
         self.sector = Some(sector);
         self
     }
@@ -96,7 +102,37 @@ pub enum WarningKind {
     },
     /// The slot directory was found by scanning and no prelude confirmed it.
     UnverifiedDirectory,
-    /// Any other accepted condition, named by a stable short code.
+    /// The prelude declares more slot-directory entries than could be read.
+    #[non_exhaustive]
+    SlotDirectoryTruncated {
+        /// Entries read.
+        found: usize,
+        /// Entries the prelude declares.
+        expected: usize,
+    },
+    /// More than one slot directory candidate fits the page.
+    AmbiguousSlotDirectory,
+    /// Live slots point into the directory itself; they were left out of the
+    /// rows.
+    #[non_exhaustive]
+    SlotOffsetsInDirectory {
+        /// Slots left out.
+        dropped: usize,
+    },
+    /// The bytes before the slot directory could not be interpreted.
+    UnknownPrelude,
+    /// `flags_06` lacks the base bits every SA17 file carries.
+    #[non_exhaustive]
+    UnsupportedFlags {
+        /// The byte at superblock offset 0x06.
+        flags_06: u8,
+    },
+    /// No page calibrated the keystream.
+    NoCalibration,
+    /// The calibration pages read as plaintext.
+    NotObfuscated,
+    /// Any other accepted condition, named by a stable short code. The crate
+    /// itself never produces this kind; it is for crates built on this one.
     Other(&'static str),
 }
 
@@ -120,6 +156,22 @@ impl fmt::Display for WarningKind {
                 write!(f, "unsupported format version {major}.{a}.{b}")
             }
             WarningKind::UnverifiedDirectory => write!(f, "slot directory is unverified"),
+            WarningKind::SlotDirectoryTruncated { found, expected } => write!(
+                f,
+                "slot directory holds {found} of the {expected} declared entries"
+            ),
+            WarningKind::AmbiguousSlotDirectory => {
+                write!(f, "more than one slot directory candidate fits")
+            }
+            WarningKind::SlotOffsetsInDirectory { dropped } => {
+                write!(f, "{dropped} slot offsets inside the directory left out")
+            }
+            WarningKind::UnknownPrelude => write!(f, "page prelude could not be interpreted"),
+            WarningKind::UnsupportedFlags { flags_06 } => {
+                write!(f, "unsupported superblock flags 0x{flags_06:02X}")
+            }
+            WarningKind::NoCalibration => write!(f, "no pure-AP page calibrated the keystream"),
+            WarningKind::NotObfuscated => write!(f, "store does not look AP-obfuscated"),
             WarningKind::Other(code) => write!(f, "{code}"),
         }
     }
