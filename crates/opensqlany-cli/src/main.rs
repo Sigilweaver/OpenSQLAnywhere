@@ -179,17 +179,19 @@ fn inspect(path: &std::path::Path, verify_crc: bool) -> Result<()> {
     if sb.magic_ok() {
         let c = store.consistency()?;
         println!(
-            "consistency       : page count {}, max page LSN {} ({})",
+            "consistency       : {} pages, hint {} ({}); max page LSN {}, superblock LSN {} ({})",
+            c.page_count(),
+            c.page_count_hint(),
             if c.page_count_matches() {
-                "matches hint"
+                "matches"
             } else {
-                "differs from hint"
+                "differs"
             },
             c.max_page_lsn(),
-            if c.lsn_matches() {
-                "matches superblock"
-            } else {
-                "differs from superblock"
+            c.current_lsn(),
+            match c.lsn_gap() {
+                Some(gap) => format!("gap {gap}"),
+                None => "page LSN is higher".to_string(),
             },
         );
     }
@@ -253,6 +255,7 @@ fn dump_page(path: &std::path::Path, pn: u64) -> Result<()> {
 
 fn slots(path: &std::path::Path, pn: u64, lenient: bool) -> Result<()> {
     let store = PageStore::open_with(path, &read_options(lenient))?;
+    print_store_warnings(&store);
     let page = store.page(pn)?;
     let slotted = SlottedPage::parse(page, &read_options(lenient))?;
     let t = page.trailer();
@@ -311,6 +314,12 @@ fn slots(path: &std::path::Path, pn: u64, lenient: bool) -> Result<()> {
     Ok(())
 }
 
+fn print_store_warnings(store: &PageStore) {
+    for w in store.warnings() {
+        println!("warning: {w}");
+    }
+}
+
 fn read_options(lenient: bool) -> ReadOptions {
     if lenient {
         ReadOptions::lenient()
@@ -322,8 +331,9 @@ fn read_options(lenient: bool) -> ReadOptions {
 fn ap_info(path: &std::path::Path, lenient: bool) -> Result<()> {
     let store = PageStore::open_with(path, &read_options(lenient))
         .with_context(|| format!("opening {path:?}"))?;
+    print_store_warnings(&store);
     print!("Learning AP model from {}... ", path.display());
-    std::io::Write::flush(&mut std::io::stdout()).ok();
+    std::io::Write::flush(&mut std::io::stdout())?;
     let model = ApModel::learn(&store, &read_options(lenient))?;
     println!("done.");
     let report = model.report();
@@ -349,6 +359,7 @@ fn deob(path: &std::path::Path, pn: u64, raw: bool, lenient: bool) -> Result<()>
         PageStore::open_with(path, &read_options(lenient))
     }
     .with_context(|| format!("opening {path:?}"))?;
+    print_store_warnings(&store);
     let page = store.page(pn)?;
     let t = page.trailer();
 
