@@ -297,6 +297,16 @@ footers (§2.1) are validated; their bodies are opaque to this spec.
   page. That reading predicts held-out strong sectors correctly 99.5 % of
   the time when unanimous but breaks at phase changes, so it is not used.
 
+- A page whose histogram top, a single exact AP sector and a calibrated page
+  elsewhere in its 16-page block all give the same `bv`, with no other
+  candidate supported, matched the trailer-count answer on 2,186 of 2,186
+  pages where a unique trailer match with count 4 or more gave an
+  independent answer (730 of 730 with count 10 or more); none disagreed. The
+  decoder accepts that agreement as `Confidence::Corroborated`. The pages it
+  cannot be checked on are the dense ones, so the observed error rate (0 in
+  2,186, 95 % upper bound about 0.14 %) is a bound for pages like the checked
+  ones, not for all pages.
+
 ## 7. References
 
 - SAP SQL Anywhere 17.0.01 product documentation:

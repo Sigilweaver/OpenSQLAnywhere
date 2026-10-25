@@ -40,8 +40,13 @@
 //!    ([`Evidence::ExactSectors`]). This assumes the constant plaintext is
 //!    zero, which is why it is [`Confidence::Calibrated`], not `Verified`.
 //!
+//! 3. **Corroboration.** Exactly one exact sector, the histogram top and a
+//!    calibrated page in the same block all give the same `bv`, and no other
+//!    candidate has any support ([`Confidence::Corroborated`]). Measured to
+//!    agree with the trailer answer on 2,186 of 2,186 checkable corpus pages.
+//!
 //! A calibrated page elsewhere in the block with the same `bv`
-//! ([`Evidence::BlockAnchor`]) is reported but is not confirmation: a block
+//! ([`Evidence::BlockAnchor`]) alone is reported but is not confirmation: a block
 //! often holds more than one `bv`.
 //!
 //! A page with none of these is [`Confidence::Unverified`] and is an error
@@ -249,6 +254,8 @@ pub enum BvSource {
     Histogram,
     /// The caller supplied `bv`.
     Supplied,
+    /// One exact sector, the histogram top and a block anchor agree.
+    Corroborated,
     /// The page was never written; no key applies.
     Unallocated,
 }
@@ -269,6 +276,13 @@ pub enum Confidence {
     /// [`Leniency::KEYSTREAM`](crate::Leniency::KEYSTREAM), with a
     /// [`WarningKind::UnverifiedKeystream`] warning.
     Unverified,
+    /// Exactly one exact sector, the histogram top and a calibrated page in
+    /// the same block give the same `bv`, and no other candidate has any
+    /// support. Observed to match the trailer answer on 2,186 of 2,186
+    /// checkable corpus pages (see `SPECIFICATION.md` section 6), but those
+    /// exclude the dense pages that need it, so it is a tier of its own below
+    /// [`Confidence::Calibrated`].
+    Corroborated,
     /// The guess rests on the page's own sectors: two or more exact AP
     /// sectors agree ([`Evidence::ExactSectors`]), under the assumption that
     /// their plaintext is zero.
@@ -859,6 +873,33 @@ fn calibrated_bv(scan: &PageScan, raw: &[u8]) -> Option<u8> {
     }
 }
 
+/// The candidate backed by all of: exactly one exact sector, the histogram
+/// top, and a calibrated page in the same block, with no other candidate
+/// having any support (an exact sector or an anchor).
+///
+/// On the 112-file corpus this three-way agreement matched the trailer
+/// answer on 2,186 of 2,186 pages where a unique trailer match with count 4
+/// or more gave an independent answer (730 of 730 with count 10 or more), so
+/// the observed error is 0 in 2,186 (95 % upper bound about 0.14 %). It
+/// admits 5,730 pages that nothing else confirms. The pages it cannot be
+/// checked on (no trailer) are the dense ones, so it is its own tier,
+/// [`Confidence::Corroborated`], below [`Confidence::Calibrated`].
+fn corroborated<'c>(
+    cands: &'c [Candidate],
+    votes: &BTreeMap<u8, usize>,
+    top: Option<u8>,
+) -> Option<&'c Candidate> {
+    let (&bv, &n) = votes.iter().next()?;
+    if votes.len() != 1 || n != 1 || Some(bv) != top {
+        return None;
+    }
+    let c = cands.iter().find(|c| c.bv == bv)?;
+    let others_supported = cands
+        .iter()
+        .any(|o| o.bv != bv && (o.exact > 0 || o.anchor));
+    (c.anchor && !others_supported).then_some(c)
+}
+
 fn choose_bv(
     scan: &PageScan,
     raw: &[u8],
@@ -978,7 +1019,12 @@ fn choose_bv(
         return ambiguous(group, warnings);
     }
 
-    // 3. Nothing confirms the best histogram candidate. A block anchor that
+    // 3. One exact sector, the histogram top and a block anchor agree.
+    if let Some(c) = corroborated(&cands, &votes, top) {
+        return Ok(pick(c, BvSource::Corroborated, Confidence::Corroborated));
+    }
+
+    // 4. Nothing confirms the best histogram candidate. A block anchor that
     //    equals it is listed as evidence but is not confirmation: `bv` takes
     //    several values inside one block on about a third of the corpus's
     //    blocks.
@@ -1586,6 +1632,75 @@ mod tests {
                 .unwrap()
                 .unallocated()
         );
+    }
+
+    /// A page whose sector 0 is all zero (one exact sector) and whose other
+    /// sectors are zero after 100 noise bytes, so the histogram top is zero.
+    fn one_exact_sector_plaintext() -> Vec<u8> {
+        let mut plain = vec![0u8; TRAILER_START];
+        for si in 1..SECTORS_PER_PAGE {
+            let (start, _) = sector_range(si);
+            plain[start..start + 100].copy_from_slice(&noise(30 + si as u64, 100));
+        }
+        plain
+    }
+
+    #[test]
+    fn one_exact_sector_top_and_anchor_are_corroborated() {
+        // Review follow-up: this three-way agreement matched the trailer
+        // answer on 2,186 of 2,186 checkable pages and recovers pages that
+        // nothing else confirms (including the I pages OpenQBW's sysindex
+        // reads). It is a tier of its own.
+        let raw = encode_page(2, b'E', 0, 40, &one_exact_sector_plaintext());
+        let store = store_of(&[pure_page(0, 5), pure_page(1, 40), raw]);
+        let model = ApModel::learn(&store, &ReadOptions::default()).unwrap();
+        let out = model
+            .deobfuscate(&store, 2, &ReadOptions::default())
+            .unwrap();
+        assert_eq!(out.bv(), Some(40));
+        assert_eq!(out.confidence(), Confidence::Corroborated);
+        assert_eq!(out.bv_source(), BvSource::Corroborated);
+        assert!(out.warnings().is_empty());
+        assert!(
+            out.evidence()
+                .iter()
+                .any(|e| matches!(e, Evidence::ExactSectors { count: 1, .. }))
+        );
+        assert!(out.evidence().contains(&Evidence::BlockAnchor));
+    }
+
+    #[test]
+    fn corroboration_needs_the_anchor_and_no_rival() {
+        let plain = one_exact_sector_plaintext();
+        // The block's calibrated page has another bv: no anchor, no tier.
+        let raw = encode_page(2, b'E', 0, 40, &plain);
+        let store = store_of(&[pure_page(0, 5), pure_page(1, 41), raw]);
+        let model = ApModel::learn(&store, &ReadOptions::default()).unwrap();
+        let err = model
+            .deobfuscate(&store, 2, &ReadOptions::default())
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::KeystreamUnverified { page: 2, bv: 40 }),
+            "{err:?}"
+        );
+
+        // Two calibrated pages in the block, one of them for a rival
+        // candidate (value 1 is common in the plaintext, so 41 is a candidate).
+        let mut rival = plain.clone();
+        rival[SECTOR_SIZE + 200..SECTOR_SIZE + 400].fill(1);
+        let raw = encode_page(2, b'E', 0, 40, &rival);
+        let store = store_of(&[pure_page(0, 5), pure_page(1, 40), raw, pure_page(3, 41)]);
+        let model = ApModel::learn(&store, &ReadOptions::default()).unwrap();
+        let err = model
+            .deobfuscate(&store, 2, &ReadOptions::default())
+            .unwrap_err();
+        assert!(
+            matches!(err, Error::KeystreamUnverified { page: 2, .. }),
+            "{err:?}"
+        );
+        // Lenient reads still decode it, flagged.
+        let lenient = model.deobfuscate(&store, 2, &lenient_keystream()).unwrap();
+        assert_eq!(lenient.confidence(), Confidence::Unverified);
     }
 
     #[test]

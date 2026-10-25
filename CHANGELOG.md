@@ -33,6 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   independent check that confirms `bv` on pages whose padding is not zero.
   It needs a count of four or more, and a page where exact sectors or a
   block anchor point at another `bv` is `AmbiguousCalibration`.
+- `Confidence::Corroborated`: one exact sector, the histogram top and a
+  block anchor agree and nothing else is supported. It matched the trailer
+  answer on 2,186 of 2,186 checkable corpus pages and is accepted in strict
+  mode, as its own tier below `Calibrated`.
 - `DeobfuscatedPage::unallocated()`: an all-zero page was never written and
   is returned as it is, with `BvSource::Unallocated`, instead of being run
   through the keystream guesser.
@@ -42,7 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Behavior changes
 
 - Strict decoding rejects pages that decoded silently before. On the
-  112-file corpus, 82 % of `A` pages and 26 % of `E` pages decode in strict
+  112-file corpus, 83 % of `A` pages and 28 % of `E` pages decode in strict
   mode; the rest need `Leniency::KEYSTREAM`, which reports the affected
   sectors. A calibrated page elsewhere in the same 16-page block with the
   same `bv` is reported (`Evidence::BlockAnchor`) but is not confirmation:
