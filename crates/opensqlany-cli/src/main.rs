@@ -44,6 +44,9 @@ enum Cmd {
     ApInfo {
         /// Path to the page-store file.
         file: PathBuf,
+        /// Accept stores that no pure-AP page calibrates.
+        #[arg(long)]
+        lenient: bool,
     },
     /// Deobfuscate and dump a single page.
     Deob {
@@ -54,6 +57,10 @@ enum Cmd {
         /// Print the raw (obfuscated) page instead of the plaintext.
         #[arg(long)]
         raw: bool,
+        /// Decode pages whose keystream is unverified, ambiguous or low
+        /// confidence; each is reported as a warning.
+        #[arg(long)]
+        lenient: bool,
     },
 }
 
@@ -63,8 +70,13 @@ fn main() -> Result<()> {
         Cmd::Inspect { file, verify_crc } => inspect(&file, verify_crc),
         Cmd::DumpPage { file, page } => dump_page(&file, page),
         Cmd::Slots { file, page } => slots(&file, page),
-        Cmd::ApInfo { file } => ap_info(&file),
-        Cmd::Deob { file, page, raw } => deob(&file, page, raw),
+        Cmd::ApInfo { file, lenient } => ap_info(&file, lenient),
+        Cmd::Deob {
+            file,
+            page,
+            raw,
+            lenient,
+        } => deob(&file, page, raw, lenient),
     }
 }
 
@@ -245,13 +257,27 @@ fn slots(path: &std::path::Path, pn: u64) -> Result<()> {
     Ok(())
 }
 
-fn ap_info(path: &std::path::Path) -> Result<()> {
+fn read_options(lenient: bool) -> ReadOptions {
+    if lenient {
+        ReadOptions::lenient()
+    } else {
+        ReadOptions::strict()
+    }
+}
+
+fn ap_info(path: &std::path::Path, lenient: bool) -> Result<()> {
     let store = PageStore::open(path).with_context(|| format!("opening {path:?}"))?;
     print!("Learning AP model from {}... ", path.display());
     std::io::Write::flush(&mut std::io::stdout()).ok();
-    let model = ApModel::learn(&store, &ReadOptions::default())?;
+    let model = ApModel::learn(&store, &read_options(lenient))?;
     println!("done.");
-    println!("  pure-AP pages  : {}", model.report().pure_pages());
+    let report = model.report();
+    println!("  pure-AP pages  : {}", report.pure_pages());
+    println!("  calibrated     : {}", report.calibrated_pages());
+    println!("  not calibrated : {}", report.ambiguous_pages());
+    for w in report.warnings() {
+        println!("  warning        : {w}");
+    }
     println!("  learned blocks : {}", model.learned_block_count());
     println!("  total blocks   : {}", store.page_count().div_ceil(16));
     println!(
@@ -261,7 +287,7 @@ fn ap_info(path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-fn deob(path: &std::path::Path, pn: u64, raw: bool) -> Result<()> {
+fn deob(path: &std::path::Path, pn: u64, raw: bool, lenient: bool) -> Result<()> {
     let store = PageStore::open(path).with_context(|| format!("opening {path:?}"))?;
     let page = store.page(pn)?;
     let t = page.trailer();
@@ -277,7 +303,7 @@ fn deob(path: &std::path::Path, pn: u64, raw: bool) -> Result<()> {
         return Ok(());
     }
 
-    let opts = ReadOptions::default();
+    let opts = read_options(lenient);
     let model = ApModel::learn(&store, &opts)?;
     let dec = model.deobfuscate(&store, pn, &opts)?;
     let plain = dec.bytes();
@@ -287,6 +313,31 @@ fn deob(path: &std::path::Path, pn: u64, raw: bool) -> Result<()> {
         "page {pn} (deobfuscated)  type {:?} (0x{:02X})  flags {:02X}/{:02X}",
         pt, plain[0xFF2], plain[0xFF0], plain[0xFF1],
     );
+    println!(
+        "bv {}  source {:?}  confidence {:?}",
+        dec.bv()
+            .map_or_else(|| "none".to_string(), |b| format!("0x{b:02X}")),
+        dec.bv_source(),
+        dec.confidence()
+    );
+    println!("evidence: {:?}", dec.evidence());
+    for (si, fit) in dec.sectors().iter().enumerate() {
+        println!(
+            "  sector {si}: step {:>3}  peak {:>3}  runner-up {:>3}{}{}",
+            fit.step(),
+            fit.peak(),
+            fit.runner_up(),
+            if fit.exact() { "  exact" } else { "" },
+            if fit.confident() {
+                ""
+            } else {
+                "  LOW CONFIDENCE"
+            },
+        );
+    }
+    for w in dec.warnings() {
+        println!("warning: {w}");
+    }
     hexdump(plain, 0);
     Ok(())
 }

@@ -138,6 +138,10 @@ pub enum Error {
         page: u64,
     },
 
+    /// The [`ApModel`](crate::ApModel) was learned from a different store.
+    #[error("model was learned from a different store")]
+    StoreMismatch,
+
     /// No page in the store carries enough AP fill to calibrate the
     /// keystream.
     #[error("no pure-AP page could calibrate the keystream")]
@@ -254,6 +258,7 @@ impl Error {
             | Error::NotObfuscated
             | Error::LowConfidenceKeystream { .. }
             | Error::AmbiguousCalibration { .. }
+            | Error::StoreMismatch
             | Error::KeystreamUnverified { .. } => ErrorKind::Keystream,
             Error::SlotOffsetInDirectory { .. }
             | Error::AmbiguousSlotDirectory { .. }

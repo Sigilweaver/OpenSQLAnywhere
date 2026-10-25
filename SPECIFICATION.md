@@ -283,6 +283,30 @@ footers (§2.1) are validated; their bodies are opaque to this spec.
   [OpenSQLAnywhere#8](https://github.com/Sigilweaver/OpenSQLAnywhere/issues/8)
   (finding 3) for the full evidence and the two ruled-out approaches.
 
+- Trailer byte `0xFF0` equals the u16 slot count stored four or six bytes
+  before the slot array on 101,337 of 140,000 `E` pages that have a
+  directory (112-file corpus). The decoder uses it to confirm `bv` for
+  counts of four or more; for a count of 1 or 2 the pair `(count, 0)` is the
+  commonest word in page data and a match was wrong on 5 of 887 pages. Pages
+  with another prelude layout do not match.
+- `bv` is not constant per 16-page block even on the original corpus: about
+  a third of blocks (32 % of 28,225, in 93 of 112 files) hold more than one
+  `bv`, typically switching by a small delta (for example `0x64` to `0x66`)
+  part way through, so a block is not evidence for a page's `bv`. Steps follow a sliding window: within a block, page `q` uses
+  values from a 12-entry list, repeated in pairs and shifted one sector per
+  page. That reading predicts held-out strong sectors correctly 99.5 % of
+  the time when unanimous but breaks at phase changes, so it is not used.
+
+- A page whose histogram top, a single exact AP sector and a calibrated page
+  elsewhere in its 16-page block all give the same `bv`, with no other
+  candidate supported, matched the trailer-count answer on 2,186 of 2,186
+  pages where a unique trailer match with count 4 or more gave an
+  independent answer (730 of 730 with count 10 or more); none disagreed. The
+  decoder accepts that agreement as `Confidence::Corroborated`. The pages it
+  cannot be checked on are the dense ones, so the observed error rate (0 in
+  2,186, 95 % upper bound about 0.14 %) is a bound for pages like the checked
+  ones, not for all pages.
+
 ## 7. References
 
 - SAP SQL Anywhere 17.0.01 product documentation:

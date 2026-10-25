@@ -56,10 +56,12 @@ mod page;
 mod slotted;
 mod store;
 mod superblock;
+mod verify;
 mod warning;
 
 pub use ap::{
-    ApModel, BvSource, DeobfuscatedPage, LearnReport, SECTOR_SIZE, SECTORS_PER_PAGE, SectorFit,
+    ApModel, BvSource, Confidence, DeobfuscatedPage, Evidence, LearnReport, SECTOR_SIZE,
+    SECTORS_PER_PAGE, SectorFit,
 };
 pub use error::{Error, ErrorKind, Result};
 pub use options::{Leniency, ReadOptions};

@@ -6,6 +6,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- AP deobfuscation no longer guesses. `bv` and each sector's step are chosen
+  deterministically and accepted only with confirming evidence; otherwise
+  `ApModel::deobfuscate` returns `Error::KeystreamUnverified`,
+  `Error::AmbiguousCalibration` or `Error::LowConfidenceKeystream`, or under
+  `Leniency::KEYSTREAM` flags the result with a `Warning`. Previously a
+  tie between calibration votes was broken by hash order (the same page
+  decoded two different ways in 10 of 20 runs), a page whose padding is not
+  zero decoded shifted by a constant, and a sector with no dominant byte
+  decoded to garbage, all without any signal.
+- `ApModel::learn` returns `Error::NoCalibration` or `Error::NotObfuscated`
+  instead of falling back to `bv = 0`, and counts lowercase pure-AP pages
+  (`'c'`, `'h'`, `'m'`, `` '`' ``) as calibration input.
+- `ApModel::deobfuscate` takes the page from the store it decodes, so
+  `raw` and `pn` can no longer disagree, and returns `Error::PageOutOfRange`
+  and `Error::StoreMismatch` instead of substituting `bv = 0`.
+
+### Added
+
+- `DeobfuscatedPage::confidence()` (`Confidence`), `evidence()` (`Evidence`)
+  and `SectorFit::{exact, confident}`.
+- `Evidence::TrailerRowCount`: the row count in a slotted page's prelude
+  must equal the plaintext trailer's count byte (`0xFF0`). It is the
+  independent check that confirms `bv` on pages whose padding is not zero.
+  It needs a count of four or more, and a page where exact sectors or a
+  block anchor point at another `bv` is `AmbiguousCalibration`.
+- `Confidence::Corroborated`: one exact sector, the histogram top and a
+  block anchor agree and nothing else is supported. It matched the trailer
+  answer on 2,186 of 2,186 checkable corpus pages and is accepted in strict
+  mode, as its own tier below `Calibrated`.
+- `DeobfuscatedPage::unallocated()`: an all-zero page was never written and
+  is returned as it is, with `BvSource::Unallocated`, instead of being run
+  through the keystream guesser.
+- `ApModel::deobfuscate_with_bv` refuses a `bv` that the page does not
+  support (`KeystreamUnverified`, or a warning under `Leniency::KEYSTREAM`).
+
+### Behavior changes
+
+- Strict decoding rejects pages that decoded silently before. On the
+  112-file corpus, 83 % of `A` pages and 28 % of `E` pages decode in strict
+  mode; the rest need `Leniency::KEYSTREAM`, which reports the affected
+  sectors. A calibrated page elsewhere in the same 16-page block with the
+  same `bv` is reported (`Evidence::BlockAnchor`) but is not confirmation:
+  about a third of blocks hold more than one `bv`. See the pull request for
+  the breakdown by error kind.
+- `BvSource` is `TrailerRowCount`, `ExactSectors`, `Histogram`, `Supplied` or
+  `Unallocated`; `Confidence::Verified` means only the trailer check. An unallocated page
+  is `Confidence::Unallocated` and `DeobfuscatedPage::bv()` is `None`: it was
+  never keyed.
+
 ### Changed
 
 - **Breaking:** the API is reshaped so later fixes ship without another

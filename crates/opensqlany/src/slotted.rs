@@ -211,7 +211,7 @@ fn scan_from(plain: &[u8], start: usize) -> Option<SlotDirectory> {
     })
 }
 
-fn find_slot_directory(plain: &[u8]) -> Option<SlotDirectory> {
+pub(crate) fn find_slot_directory(plain: &[u8]) -> Option<SlotDirectory> {
     let mut best: Option<SlotDirectory> = None;
     for start in 0..SEARCH_LIMIT {
         let Some(cand) = scan_from(plain, start) else {
