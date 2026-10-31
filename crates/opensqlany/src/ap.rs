@@ -1147,6 +1147,23 @@ mod tests {
     use super::*;
     use crate::page::PageTrailer;
 
+    #[test]
+    fn integrity_check_treats_page_zero_by_crc_alone() {
+        // Page 0 holds fingerprint text in 0xFF0..0xFFB (SPECIFICATION.md
+        // section 3.4); the trailer rule covers pages 1..N (section 4.1).
+        let mut p = vec![b'x'; crate::PAGE_SIZE];
+        let crc = crc32fast::hash(&p[..0xFFC]);
+        p[0xFFC..].copy_from_slice(&crc.to_le_bytes());
+        let store = PageStore::from_bytes_unchecked(p.clone()).unwrap();
+        check_integrity(store.page(0).unwrap()).expect("page 0 passes");
+        p[0x500] = b'y';
+        let store = PageStore::from_bytes_unchecked(p).unwrap();
+        assert!(matches!(
+            check_integrity(store.page(0).unwrap()),
+            Err(Error::BadCrc { page: 0, .. })
+        ));
+    }
+
     /// Deterministic pseudo-random bytes (xorshift), so dense plaintext in
     /// tests is the same on every run.
     fn noise(seed: u64, len: usize) -> Vec<u8> {
