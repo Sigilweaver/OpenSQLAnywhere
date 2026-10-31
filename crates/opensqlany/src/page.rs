@@ -111,12 +111,18 @@ impl<'a> Page<'a> {
 
     /// Returns `Ok(())` if the trailer's reserved-zero regions are zero.
     ///
+    /// The rule is for data pages 1..N. Page 0 is the superblock, whose
+    /// `0x400..0xFFC` holds the rolled engine fingerprint text, so its
+    /// bytes at `0xFF0..0xFFB` are text and not a trailer; this returns
+    /// `Ok(())` for page 0 and its integrity is the CRC check alone
+    /// (`SPECIFICATION.md` sections 3.4 and 4.1).
+    ///
     /// The reserved regions are byte `0xFF3` and bytes `0xFF8..0xFFB`.
     /// Bytes `0xFF6..0xFF7` were previously checked as reserved too, but
     /// they are the high half of [`PageTrailer::lsn`] and are non-zero on
     /// any file whose LSN has passed 65 535 - which rejected valid pages.
     pub fn verify_trailer(&self) -> Result<()> {
-        if self.trailer().reserved_zero() {
+        if self.index == 0 || self.trailer().reserved_zero() {
             Ok(())
         } else {
             Err(Error::BadTrailer { page: self.index })

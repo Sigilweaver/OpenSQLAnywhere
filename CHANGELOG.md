@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Page 0 is checked by CRC alone. `Page::verify_trailer` returns `Ok(())`
+  for page 0, because the superblock's `0x400..0xFFC` holds the rolled
+  fingerprint text and its bytes at `0xFF0..0xFFB` are not a data-page
+  trailer; `PageStore::page_verified`, `PageStore::verified_pages` and the
+  `ApModel` integrity checks previously failed page 0 with
+  `Error::BadTrailer` on real QuickBooks files. Pages 1..N keep both checks.
+
 - AP deobfuscation no longer guesses. `bv` and each sector's step are chosen
   deterministically and accepted only with confirming evidence; otherwise
   `ApModel::deobfuscate` returns `Error::KeystreamUnverified`,

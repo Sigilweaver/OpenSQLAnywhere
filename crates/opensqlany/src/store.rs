@@ -214,7 +214,9 @@ impl PageStore {
         })
     }
 
-    /// Borrow a page after checking its CRC and trailer.
+    /// Borrow a page after checking its CRC and trailer. Page 0, the
+    /// superblock, has no data-page trailer and is checked by CRC alone
+    /// (see [`Page::verify_trailer`]).
     ///
     /// An all-zero page is unallocated and passes: its stored CRC is zero
     /// while the CRC of zeros is not. Anything else that fails is

@@ -31,8 +31,9 @@ An SA17 page-store file is a sequence of fixed-size 4 KiB pages.
 
 ## 2. Universal per-page invariants
 
-Every page, including page 0, is subject to the following structural
-invariants.
+Every page, including page 0, carries the CRC footer (§2.1). The
+twelve-byte trailer (§2.2) applies to pages 1..N: on page 0 the bytes at
+`0xFF0..0xFFB` are part of the fingerprint text (§3.4).
 
 ### 2.1 CRC-32 footer at 0xFFC
 
@@ -198,7 +199,8 @@ the CRC-32 footer per §2.1. The fingerprint pins the engine to
 ### 4.1 Trailer and CRC apply universally
 
 Every page 1..N has the trailer (§2.2) and CRC (§2.1). No exceptions in
-the observed corpus.
+the observed corpus. Page 0 has the CRC only; its `0xFF0..0xFFB` is
+fingerprint text (§3.4).
 
 ### 4.2 Slotted-page directory (catalog and data pages)
 
