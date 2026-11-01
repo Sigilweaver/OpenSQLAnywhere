@@ -11,7 +11,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-opensqlany = "0.2"
+opensqlany = "0.3"
 ```
 
 MSRV: Rust 1.87.

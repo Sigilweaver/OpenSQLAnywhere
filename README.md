@@ -32,7 +32,7 @@ OpenSQLAnywhere/
 
 ```toml
 [dependencies]
-opensqlany = "0.2"
+opensqlany = "0.3"
 ```
 
 ```rust
