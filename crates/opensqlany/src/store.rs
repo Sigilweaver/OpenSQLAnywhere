@@ -214,7 +214,9 @@ impl PageStore {
         })
     }
 
-    /// Borrow a page after checking its CRC and trailer.
+    /// Borrow a page after checking its CRC and trailer. Page 0, the
+    /// superblock, has no data-page trailer and is checked by CRC alone
+    /// (see [`Page::verify_trailer`]).
     ///
     /// An all-zero page is unallocated and passes: its stored CRC is zero
     /// while the CRC of zeros is not. Anything else that fails is
@@ -393,6 +395,69 @@ mod tests {
             Err(Error::Io(_))
         ));
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Fill `page` with a CRC footer over its first 0xFFC bytes.
+    fn seal(page: &mut [u8]) {
+        let crc = crc32fast::hash(&page[..0xFFC]);
+        page[0xFFC..].copy_from_slice(&crc.to_le_bytes());
+    }
+
+    /// Synthetic page 0 whose 0x400..0xFFC region is a rolled text cycle, so
+    /// 0xFF0..0xFFB is text rather than a data-page trailer
+    /// (SPECIFICATION.md section 3.4).
+    fn text_tail_superblock() -> Vec<u8> {
+        let mut p = superblock_page(12, 0x09, SA_MAGIC);
+        let cycle = b"synthetic filler text, not an engine string. ";
+        for (i, b) in p[0x400..0xFFC].iter_mut().enumerate() {
+            *b = cycle[i % cycle.len()];
+        }
+        assert_ne!(p[0xFF3], 0);
+        assert_ne!(p[0xFF8], 0);
+        seal(&mut p);
+        p
+    }
+
+    #[test]
+    fn page_zero_with_a_text_tail_passes_on_crc_alone() {
+        // SPECIFICATION.md section 4.1: the trailer rule is for pages 1..N.
+        let store = PageStore::from_bytes(text_tail_superblock()).unwrap();
+        store.page_verified(0).expect("page 0 passes");
+        assert!(store.verified_pages().all(|p| p.is_ok()));
+    }
+
+    #[test]
+    fn page_zero_with_a_bad_crc_still_fails() {
+        let mut p = text_tail_superblock();
+        p[0x500] ^= 0xFF;
+        let store = PageStore::from_bytes(p).unwrap();
+        assert!(matches!(
+            store.page_verified(0),
+            Err(Error::BadCrc { page: 0, .. })
+        ));
+    }
+
+    #[test]
+    fn a_data_page_with_ff3_set_fails_the_trailer_rule() {
+        let mut bytes = text_tail_superblock();
+        let mut data = vec![5u8; PAGE_SIZE];
+        data[0xFF3] = 0;
+        data[0xFF8..0xFFC].fill(0);
+        seal(&mut data);
+        bytes.extend_from_slice(&data);
+        let store = PageStore::from_bytes(bytes.clone()).unwrap();
+        store.page_verified(1).expect("clean data page passes");
+
+        let mut bad = data;
+        bad[0xFF3] = 1;
+        seal(&mut bad);
+        bytes.truncate(PAGE_SIZE);
+        bytes.extend_from_slice(&bad);
+        let store = PageStore::from_bytes(bytes).unwrap();
+        assert!(matches!(
+            store.page_verified(1),
+            Err(Error::BadTrailer { page: 1 })
+        ));
     }
 
     #[test]
