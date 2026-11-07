@@ -1,7 +1,6 @@
 # OpenSQLAnywhere - Page-Store Format Specification
 
-**Status:** v0.1 draft. Covers the page-store layer only.
-Catalog-row decoding is deferred to v0.2.
+**Status:** v0.1 draft, with additional SA17 row and catalog observations in §8.
 
 This document describes the on-disk format of SAP SQL Anywhere 17
 (build 2182, 2015 release) database files as it is actually observed
@@ -340,3 +339,113 @@ footers (§2.1) are validated; their bodies are opaque to this spec.
   <https://help.sap.com/docs/SAP_SQL_Anywhere>
 - `crc32fast` Rust crate (IEEE 802.3 / zlib polynomial):
   <https://crates.io/crates/crc32fast>
+
+
+## 8. Physical row and catalog records
+
+The following observations extend the page-store format to supported SA17 row
+layouts. Subtracting additive fill alone does not restore logical row order:
+sectors can also rotate or displace bytes. Unsupported or ambiguous layouts
+require further evidence.
+
+### 8.1. Row pages and directories
+
+The logical first sector can be recovered by considering the supported odd
+rotations. The physical page number supplies known bytes; header constants,
+complete directory bounds and the stored trailer supply independent checks.
+
+| Logical offset | Field |
+| --- | --- |
+| 0 | Physical page number, little-endian u32 |
+| 16 | Row-header marker |
+| 17 | Page kind |
+| 20 | Lowest row-area offset |
+| 22 | Number of directory slots |
+| 24 | Owner ID, little-endian u32 |
+| 28 | Directory words, relative to offset 28 |
+
+A zero directory word is vacant. Occupied slots can follow a vacancy. The
+trailer word at `0xFF0` counts the initial occupied prefix, not every occupied
+slot. Physical spans come from ordered nonzero starts and the row-area end.
+Encoded row-length words provide checks on later-sector reconstruction.
+
+Sparse sectors can require parameters learned from independently checked pages
+in other blocks of the same store. Held-out pages and local length words check
+those parameters. Complete-page reconstruction also requires agreement with
+known sectors and all applicable frame bounds; conflicting candidates remain
+unresolved.
+
+### 8.2. Catalogs, fields and schema epochs
+
+Owners 1 and 2 contain table and column definitions. Older physical definitions
+can coexist with current ones, so an inline name alone does not establish the
+current schema. Column definitions carry domain, width, scale, nullability and
+physical column identifiers.
+
+Ordinary records have a little-endian length and flags; the versioned form also
+stores a schema byte. Catalog schema epochs distinguish layouts, including
+original column identifiers after a drop/add sequence. A missing epoch does not
+justify retrying with a shorter layout or inventing a default value.
+
+Integer fields retain signedness. NUMERIC digits are base 100, least-significant
+first; the sign bit set in the control byte means positive. Floating-point
+values retain their original bits. Date/time storage fields and text/binary
+octets need interpretation separately from their physical framing.
+
+Live and deleted flags are distinct. The nine-byte minimum allocation permits
+only the checked zero suffix; it does not justify arbitrary trailing-byte
+removal.
+
+### 8.3. Forwarded and referenced values
+
+A nine-byte `0x04` or `0x44` forward names a page and slot. The source and terminal
+record have separate addresses. Owner, page kind, physical length, terminal
+flags, range and cycle checks apply to a forward chain.
+
+Forwarded records and schema-tagged live records can coexist with deleted
+records in the same table. Account for deleted slots separately, then apply
+the usual forward and layout checks to each live record. The presence of
+deleted slots does not restrict all other records to flags `0x00` or `0x08`.
+Occupied-slot counts include deleted allocations; resolve a forward as one
+live row, retaining both its source and terminal addresses.
+
+Byte markers determine storage framing independently of declared width:
+
+- Markers below `0x80` carry an inline length.
+- `0xff` introduces an extended big-endian u16 length.
+- Reference markers carry an inline prefix and an explicit descriptor.
+
+Logical length, encoded frame length and physical allocation length are
+separate quantities. Referenced byte chains retain each frame's allocation
+boundary and terminal surplus. Unknown tags, foreign owners, missing slots,
+cycles and incomplete chains are not complete values.
+
+Compressed byte streams have an envelope and bounded blocks. Block kinds,
+offsets, complete zlib consumption, checksums and the separate logical length
+all constrain the decoded value.
+
+Domain-31 bitsets retain their serialized RLE bytes independently of dense
+logical output. A word-aligned bit universe is followed by controls and literal
+words. Controls use `word >> 7` fill words, low six bits for the literal count,
+and bit 6 for the fill value. Words are little-endian and page bits start at the
+least-significant bit. Trailing logical zero bytes and present-empty values
+are meaningful.
+
+### 8.4. Table membership and the self catalog
+
+The table-page list selects current allocation independently of owner-ID scans.
+Data-page and extension-page lists are different structures. A matching row
+count does not distinguish competing bitmaps; selected pages must also agree
+in identity, owner, kind and bounds.
+
+For the supported NULL self-map case, owner 1 has a reserved terminal H-page-10
+stream. Its structural header contains the expected page number and stream
+kind, a terminal next-page field and an aligned stream within the first sector.
+The stream starts at logical offset 24; its exclusive end is retained in the
+stored trailer word at `0xFF0`. The logical header's bytes 18..20 instead contain
+displaced tail bytes. Other framing and cross-sector streams remain unresolved.
+
+Structural alternatives must be exhausted before bitmap grammar or declared
+cardinality can prefer a header. Members have allocated owner-1 row kinds,
+complete directories and matching prefix counts. Record visibility and complete
+schema/value decoding remain separate checks.

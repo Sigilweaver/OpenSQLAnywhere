@@ -6,6 +6,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Strict SA17 physical row and catalog decoding, schema-aware values, forwarded
+  records, bounded long-value/compression/bitset readers, validated table-page
+  maps and the reserved self-catalog bitmap.
+
 ## [0.3.0] - 2026-11-01
 
 ### Fixed

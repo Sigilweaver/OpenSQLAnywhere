@@ -15,6 +15,7 @@ categories = ["parser-implementations", "database"]
 
 [dependencies]
 crc32fast.workspace = true
+flate2 = { version = "1.1.11", default-features = false, features = ["rust_backend"] }
 thiserror.workspace = true
 
 [dev-dependencies]
