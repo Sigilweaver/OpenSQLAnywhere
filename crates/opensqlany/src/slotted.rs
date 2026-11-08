@@ -368,7 +368,7 @@ fn prelude_candidates(plain: &[u8], count: usize) -> PreludeCandidates {
             }
             let (slots, complete) = read_declared(plain, start, count);
             // A real array starts with its highest offset, a live slot.
-            if !slots.first().is_some_and(|&s| s != 0) {
+            if slots.first().is_none_or(|&s| s == 0) {
                 continue;
             }
             if complete {

@@ -22,11 +22,13 @@
 //!
 //! # Scope
 //!
-//! This crate covers the **page-store layer only**: opening a file,
-//! iterating pages, validating integrity, classifying pages by type,
-//! decoding slotted-page directories, and removing the AP fill cipher.
-//! System catalog parsing (`SYSTABLE`/`SYSCOLUMN`/`SYSINDEX` rows and
-//! typed column values) is planned for a later release.
+//! The page-store API opens files, validates their integrity and inspects
+//! physical pages. For QBW row pages, [`RowSectorReader`] reconstructs
+//! length-checked slots with evidence for the regions it used. [`CatalogFragment`]
+//! reads observed physical table and column definitions. [`SchemaHistory`]
+//! selects a catalog-declared column layout and [`TablePageBitmap`] checks a
+//! physical table record's page list. Unresolved regions and historical
+//! copies matter when interpreting these records as current SQL rows.
 //!
 //! # Example
 //!
@@ -50,9 +52,14 @@
 #![warn(missing_docs)]
 
 mod ap;
+mod calibration;
+mod catalog;
 mod error;
 mod options;
 mod page;
+mod page_bitmap;
+mod record;
+mod row;
 mod slotted;
 mod store;
 mod superblock;
@@ -63,9 +70,49 @@ pub use ap::{
     ApModel, BvSource, Confidence, DeobfuscatedPage, Evidence, LearnReport, SECTOR_SIZE,
     SECTORS_PER_PAGE, SectorFit,
 };
+pub use calibration::{
+    CalibratedPage, CalibratedStore, CalibrationGap, WholePageFraming, WholePageRecovery,
+};
+pub use catalog::CatalogFragment;
+pub use catalog::bootstrap::{CatalogBootstrapError, SelfCatalogBootstrap};
+pub use catalog::columns::{ColumnCatalogMap, ColumnCatalogMembers, ColumnCatalogSlots};
+pub use catalog::recovery::{
+    CatalogRecoveryContext, CatalogRecoveryError, CatalogRowCandidate, CorroboratedCatalogPage,
+    recover_catalog_slot,
+};
+pub use catalog::schema_history::{CatalogSchemaVersions, SchemaHistory, SchemaHistoryError};
+pub use catalog::witness::{
+    CatalogChunkWitness, CatalogChunkWitnessError, CatalogChunkWitnesses, Witnessed,
+};
 pub use error::{Error, ErrorKind, Result};
 pub use options::{Leniency, ReadOptions};
 pub use page::{PAGE_SIZE, Page, PageTrailer, PageType};
+pub use page_bitmap::bitset::{
+    DecodedBitset, StoredBitsetCandidate, StoredBitsetError, decode_serialized_bitset,
+};
+pub use page_bitmap::{
+    BitmapConflictWitness, BitmapLiteralWitness, BitmapSectorWitness, CatalogPageClaims,
+    EmptyMapAllocation, LinkedBitmapSearch, LinkedBitmapSector, LinkedMapChunk, LinkedMapEvidence,
+    PageBitmapError, TableMapRead, TablePageBitmap, TablePageCounts,
+};
+pub use record::byte_chain::{ByteChainCandidate, ByteChainChunk, ByteChainError};
+pub use record::compression::{
+    CompressedByteCandidate, CompressionError, StoredByteError, decode_compressed_stream,
+};
+pub use record::long_value::{
+    LongValueCandidate, LongValueError, TextChunkPeer, resolve_single_chunk,
+};
+pub use record::{
+    CompressedDescriptor, LongDescriptor, MinimumPaddedRecord, PhysicalNumeric, PhysicalRecord,
+    PhysicalValue, RecordColumn, RecordError, RecordLayout,
+};
+pub use row::forwarded::{ForwardedRow, ForwardedRowError, ForwardedSlot, forwarded_row_address};
+pub use row::header::{RowHeaderError, RowPageHeader};
+pub use row::physical::{PhysicalRow, RowLengthMismatch};
+pub use row::sector::{
+    RowSectorCandidate, RowSectorReader, RowSectorRecovery, RowSlotRecovery, RowSlotSector,
+};
+pub use row::tail::{RowTail, RowTailError};
 pub use slotted::{Row, SlotDirectory, SlottedPage};
 pub use store::{PageStore, Pages};
 pub use superblock::{FLAGS_06_BASE, FormatVersion, SA_COPYRIGHT_MARKER, SA_MAGIC, Superblock};
