@@ -6,11 +6,10 @@ that QuickBooks Desktop embeds.
 
 ## Scope
 
-We only accept contributions that target the **on-disk file format**
-of databases that the lawful owner can already open. We do **not**
+I only accept contributions that target the **on-disk file format**
+of databases that the lawful owner can already open. I do **not**
 accept:
 
-- Code or assets derived from disassembled SAP binaries.
 - Password recovery or DRM bypass tools.
 - Anything that ships SAP trademarks or copyrighted content.
 
@@ -35,26 +34,16 @@ For any PR:
   (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`).
 - Code is ASCII only and `#![forbid(unsafe_code)]`.
 
-## Vendor software and clean-room policy
+## Provenance
 
-This project is maintained clean-room: format knowledge must come from
-your own analysis of files you have a right to read, not from SAP's
-SDK, documentation, or software. Do not run, depend on, or validate your
-implementation against SAP SQL Anywhere itself, or any tool that reads
-the format through SAP's own libraries - not in CI, not in tests, not in
-local development. Correctness is argued only from independent analysis
-of the on-disk format and roundtrip/self-consistency invariants.
-
-**Pull requests that were written or verified with the help of
-proprietary vendor software will not be accepted**, regardless of code
-quality, since accepting them would compromise the project's clean-room
-provenance. If you've found a bug this way, or you'd simply rather not
-write the fix yourself, please open an issue instead. Describe the
-symptom on the input that triggers it - what's wrong, and on what file -
-without pasting vendor tool output, vendor source, or values you learned
-by running vendor software. We'll investigate and fix it from
-independent analysis. Detailed issue reports are genuinely useful and
-will be acted on.
+Format knowledge must come from public files and your own analysis, not
+from SAP code, SDKs or confidential documents, and not from decompiling,
+tracing or bypassing protection in SAP software. The rules, including
+what to put in a PR or issue, are in the shared
+[format provenance policy](https://github.com/Sigilweaver/ops/blob/main/PROVENANCE.md).
+The policy allows a disclosed black-box cross-check against vendor software
+you are licensed to run, as a cross-check only and never the sole basis for
+a value.
 
 ## Security
 
