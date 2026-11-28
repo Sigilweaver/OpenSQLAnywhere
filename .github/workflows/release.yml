@@ -12,6 +12,7 @@ env:
 jobs:
   publish:
     name: publish to crates.io
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     environment: crates-io
     permissions:
@@ -40,6 +41,7 @@ jobs:
 
   github-release:
     name: Create the GitHub Release
+    if: github.ref_type == 'tag'
     needs: [publish]
     permissions:
       contents: write
